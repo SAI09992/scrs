@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { db } from '../../lib/firebaseClient';
 import { doc, onSnapshot } from 'firebase/firestore';
+import { Howl } from 'howler';
 
 export default function GlobalAudioPlayer() {
     const [audioConfig, setAudioConfig] = useState({ url: '', is_enabled: false });
     const [isPlaying, setIsPlaying] = useState(false);
     const [error, setError] = useState(false);
-    const audioRef = useRef(null);
+    const howlRef = useRef(null);
     const hasInteracted = useRef(false);
 
     // Listen to Firestore for current global audio track
@@ -25,72 +26,84 @@ export default function GlobalAudioPlayer() {
         return () => unsubscribe();
     }, []);
 
-    // Handle play/pause sync when config changes
+    // Handle audio initialization, play/pause sync when config changes
     useEffect(() => {
-        if (!audioRef.current) return;
-
         if (!audioConfig.is_enabled || !audioConfig.url) {
             // Stop immediately if disabled or URL is empty
-            audioRef.current.pause();
+            if (howlRef.current) {
+                howlRef.current.stop();
+                howlRef.current.unload();
+                howlRef.current = null;
+            }
             setIsPlaying(false);
             return;
         }
 
-        // If enabled and we have a URL, but the src is different, change it
-        if (audioRef.current.src !== audioConfig.url) {
-            audioRef.current.src = audioConfig.url;
-            audioRef.current.load();
+        // Initialize or re-initialize Howl instance if URL changes
+        if (!howlRef.current || howlRef.current._src !== audioConfig.url) {
+            if (howlRef.current) {
+                howlRef.current.stop();
+                howlRef.current.unload();
+            }
+
+            howlRef.current = new Howl({
+                src: [audioConfig.url],
+                html5: true, // Forces HTML5 Audio, crucial for streaming large files / bypassing some CORS
+                loop: true,
+                format: ['mp3', 'wav', 'mpeg', 'm4a'], // Hints to Howler to try these formats
+                onloaderror: (id, err) => {
+                    console.error("Howler Load Error:", err);
+                    setError(true);
+                    setIsPlaying(false);
+                },
+                onplayerror: (id, err) => {
+                    console.error("Howler Play Error:", err);
+                    howlRef.current.once('unlock', () => {
+                        howlRef.current.play();
+                    });
+                },
+                onplay: () => {
+                    setIsPlaying(true);
+                    setError(false);
+                },
+                onpause: () => {
+                    setIsPlaying(false);
+                }
+            });
         }
 
         // Try to play if we've already had a user interaction or were previously playing
         if (hasInteracted.current || isPlaying) {
-            const playPromise = audioRef.current.play();
-            if (playPromise !== undefined) {
-                playPromise.then(() => {
-                    setIsPlaying(true);
-                    setError(false);
-                }).catch((e) => {
-                    console.warn('Autoplay prevented. Waiting for user interaction:', e);
-                    setIsPlaying(false);
-                });
+            if (!howlRef.current.playing()) {
+                howlRef.current.play();
             }
         }
+
+        return () => {
+            // Cleanup happens on unmount or URL change
+        };
     }, [audioConfig, isPlaying]);
 
     const togglePlay = () => {
-        if (!audioRef.current || !audioConfig.is_enabled || !audioConfig.url) return;
+        if (!howlRef.current || !audioConfig.is_enabled || !audioConfig.url) return;
 
         hasInteracted.current = true;
 
-        if (isPlaying) {
-            audioRef.current.pause();
-            setIsPlaying(false);
+        if (howlRef.current.playing()) {
+            howlRef.current.pause();
         } else {
-            const playPromise = audioRef.current.play();
-            if (playPromise !== undefined) {
-                playPromise.then(() => {
-                    setIsPlaying(true);
-                    setError(false);
-                }).catch(e => {
-                    console.error("Audio playback failed:", e);
-                    setError(true);
-                });
-            }
+            howlRef.current.play();
         }
     };
 
     // Don't render the UI toggle if the feature is completely disabled server-side
     // or if no URL is provided.
     if (!audioConfig.is_enabled || !audioConfig.url) {
-        return (
-            <audio ref={audioRef} loop />
-        );
+        return null;
     }
 
     return (
         <div style={{ position: 'fixed', top: '15px', left: '15px', zIndex: 9999 }}>
-            <audio ref={audioRef} loop />
-
             <button
                 onClick={togglePlay}
                 style={{
