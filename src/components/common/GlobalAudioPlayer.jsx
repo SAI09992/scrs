@@ -31,7 +31,6 @@ export default function GlobalAudioPlayer() {
         if (!audioConfig.is_enabled || !audioConfig.url) {
             // Stop immediately if disabled or URL is empty
             if (howlRef.current) {
-                howlRef.current.stop();
                 howlRef.current.unload();
                 howlRef.current = null;
             }
@@ -42,7 +41,6 @@ export default function GlobalAudioPlayer() {
         // Initialize or re-initialize Howl instance if URL changes
         if (!howlRef.current || howlRef.current._src !== audioConfig.url) {
             if (howlRef.current) {
-                howlRef.current.stop();
                 howlRef.current.unload();
             }
 
@@ -79,21 +77,23 @@ export default function GlobalAudioPlayer() {
                 },
                 onpause: () => {
                     setIsPlaying(false);
+                },
+                onstop: () => {
+                    setIsPlaying(false);
                 }
             });
-        }
 
-        // Try to play if we've already had a user interaction or were previously playing
-        if (hasInteracted.current || isPlaying) {
-            if (!howlRef.current.playing()) {
+            // If we've already had a user interaction in this session, attempt to play the new track automatically
+            if (hasInteracted.current) {
                 howlRef.current.play();
             }
         }
 
         return () => {
-            // Cleanup happens on unmount or URL change
+            // Let the audio track keep playing across navigations.
+            // It will only be destroyed if the config gets disabled.
         };
-    }, [audioConfig, isPlaying]);
+    }, [audioConfig.url, audioConfig.is_enabled]);
 
     const togglePlay = () => {
         if (!howlRef.current || !audioConfig.is_enabled || !audioConfig.url) return;
@@ -114,34 +114,36 @@ export default function GlobalAudioPlayer() {
     }
 
     return (
-        <div style={{ position: 'fixed', top: '15px', left: '15px', zIndex: 9999 }}>
+        <div style={{ position: 'fixed', bottom: '25px', right: '25px', zIndex: 9999 }}>
             <button
                 onClick={togglePlay}
                 style={{
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    width: '45px',
-                    height: '45px',
+                    width: '56px',
+                    height: '56px',
                     borderRadius: '50%',
-                    background: isPlaying ? 'rgba(0, 255, 255, 0.1)' : 'rgba(20, 8, 0, 0.6)',
-                    border: `1px solid ${isPlaying ? 'rgba(0, 255, 255, 0.4)' : 'rgba(255, 140, 0, 0.3)'}`,
-                    backdropFilter: 'blur(8px)',
-                    WebkitBackdropFilter: 'blur(8px)',
+                    background: isPlaying ? 'rgba(0, 255, 255, 0.15)' : 'rgba(15, 15, 15, 0.8)',
+                    border: `2px solid ${isPlaying ? 'rgba(0, 255, 255, 0.6)' : 'rgba(255, 140, 0, 0.5)'}`,
+                    backdropFilter: 'blur(10px)',
+                    WebkitBackdropFilter: 'blur(10px)',
                     color: isPlaying ? '#0ff' : '#ff8c00',
                     cursor: 'pointer',
-                    boxShadow: isPlaying ? '0 0 15px rgba(0, 255, 255, 0.2)' : '0 4px 6px rgba(0, 0, 0, 0.3)',
-                    transition: 'all 0.3s ease',
+                    boxShadow: isPlaying ? '0 0 25px rgba(0, 255, 255, 0.3)' : '0 8px 16px rgba(0, 0, 0, 0.6)',
+                    transition: 'all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
                     position: 'relative',
                     overflow: 'hidden'
                 }}
                 onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'scale(1.05)';
-                    e.currentTarget.style.border = `1px solid ${isPlaying ? 'rgba(0, 255, 255, 0.8)' : 'rgba(255, 140, 0, 0.8)'}`;
+                    e.currentTarget.style.transform = 'scale(1.1)';
+                    e.currentTarget.style.border = `2px solid ${isPlaying ? '#0ff' : '#ff8c00'}`;
+                    e.currentTarget.style.boxShadow = isPlaying ? '0 0 30px rgba(0, 255, 255, 0.5)' : '0 0 20px rgba(255, 140, 0, 0.4)';
                 }}
                 onMouseLeave={(e) => {
                     e.currentTarget.style.transform = 'scale(1)';
-                    e.currentTarget.style.border = `1px solid ${isPlaying ? 'rgba(0, 255, 255, 0.4)' : 'rgba(255, 140, 0, 0.3)'}`;
+                    e.currentTarget.style.border = `2px solid ${isPlaying ? 'rgba(0, 255, 255, 0.6)' : 'rgba(255, 140, 0, 0.5)'}`;
+                    e.currentTarget.style.boxShadow = isPlaying ? '0 0 25px rgba(0, 255, 255, 0.3)' : '0 8px 16px rgba(0, 0, 0, 0.6)';
                 }}
                 title={isPlaying ? "Pause Background Music" : "Play Background Music"}
             >
@@ -151,22 +153,34 @@ export default function GlobalAudioPlayer() {
                         position: 'absolute',
                         inset: 0,
                         borderRadius: '50%',
-                        background: 'radial-gradient(circle, rgba(0,255,255,0.2) 0%, transparent 70%)',
+                        background: 'radial-gradient(circle, rgba(0,255,255,0.2) 0%, transparent 60%)',
                         animation: 'pulse-audio 2s infinite ease-in-out'
                     }} />
                 )}
 
                 {/* Icons */}
-                <span style={{ fontSize: '1.2rem', zIndex: 1, position: 'absolute' }}>
-                    {error ? '⚠️' : (isPlaying ? '⏸' : '🎵')}
+                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1, position: 'absolute' }}>
+                    {error ? (
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="28" height="28">
+                            <path d="M11 15h2v2h-2zm0-8h2v6h-2zm.99-5C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8z" />
+                        </svg>
+                    ) : isPlaying ? (
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="28" height="28">
+                            <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                        </svg>
+                    ) : (
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="28" height="28" style={{ marginLeft: '4px' }}>
+                            <path d="M8 5v14l11-7z" />
+                        </svg>
+                    )}
                 </span>
 
             </button>
             <style>{`
                 @keyframes pulse-audio {
-                    0% { transform: scale(0.8); opacity: 0.5; }
-                    50% { transform: scale(1.2); opacity: 0.8; }
-                    100% { transform: scale(0.8); opacity: 0.5; }
+                    0% { transform: scale(0.85); opacity: 0.5; }
+                    50% { transform: scale(1.15); opacity: 0.8; }
+                    100% { transform: scale(0.85); opacity: 0.5; }
                 }
             `}</style>
         </div>
