@@ -1,16 +1,13 @@
 import { useState, useRef } from 'react';
 import * as XLSX from 'xlsx';
+import { db } from '../../lib/firebaseClient';
+import { collection, addDoc, serverTimestamp, writeBatch, doc } from 'firebase/firestore';
 
 const S = { gold: '#ff8c00', card: 'rgba(15,10,5,0.85)', border: 'rgba(255,140,0,0.2)', text: 'rgba(255,255,255,0.85)', dim: 'rgba(255,255,255,0.5)' };
 
-/**
- * Smart parser: reads the header row to find column positions,
- * then extracts team name and member details from each data row.
- */
 function parseExcelWithHeaders(rows) {
     if (rows.length < 2) return [];
 
-    // Find header row
     let headerIdx = -1;
     let headers = [];
     for (let i = 0; i < Math.min(rows.length, 5); i++) {
@@ -22,24 +19,17 @@ function parseExcelWithHeaders(rows) {
         }
     }
 
-    console.log('Header row index:', headerIdx);
-    console.log('Headers:', headers);
-
     if (headerIdx === -1) {
         return parseHorizontalNoHeader(rows);
     }
 
-    // Map column indices
     const colMap = { members: {} };
     headers.forEach((h, i) => {
-        // Team name column
         if (/team\s*name/i.test(h) || (h === 'team' && !h.includes('member'))) {
             colMap.teamName = i;
         }
         if (/email/i.test(h)) colMap.email = i;
 
-        // Member name: "Team member - 1", "Team member-1", "Member 1", etc.
-        // But NOT if it contains 'reg'
         if (!h.includes('reg')) {
             const memberMatch = h.match(/member\s*[-–]?\s*(\d)/i);
             if (memberMatch) {
@@ -49,7 +39,6 @@ function parseExcelWithHeaders(rows) {
             }
         }
 
-        // Reg no: "Team member 1 - Reg No", "Member 1 Reg", etc.
         if (h.includes('reg')) {
             const regMatch = h.match(/member\s*[-–]?\s*(\d)/i) || h.match(/(\d)\s*[-–]?\s*reg/i);
             if (regMatch) {
@@ -60,16 +49,12 @@ function parseExcelWithHeaders(rows) {
         }
     });
 
-    // If no explicit team name column, use the column just after timestamp/email
     if (colMap.teamName === undefined) {
         headers.forEach((h, i) => {
             if (/name/i.test(h) && !h.includes('member')) colMap.teamName = i;
         });
     }
 
-    console.log('Column map:', JSON.stringify(colMap));
-
-    // Parse data rows
     const teams = [];
     for (let r = headerIdx + 1; r < rows.length; r++) {
         const cells = rows[r].map(c => (c === null || c === undefined) ? '' : String(c).trim());
@@ -86,7 +71,6 @@ function parseExcelWithHeaders(rows) {
             const name = m.name !== undefined ? cells[m.name] || '' : '';
             let regNo = m.regNo !== undefined ? cells[m.regNo] || '' : '';
 
-            // Convert scientific notation
             if (regNo && /E\+/i.test(regNo)) {
                 try { regNo = BigInt(Math.round(parseFloat(regNo))).toString(); } catch { regNo = String(Math.round(parseFloat(regNo))); }
             }
@@ -106,18 +90,13 @@ function parseExcelWithHeaders(rows) {
         }
     }
 
-    console.log('Teams found with header parser:', teams.length);
-
-    // Fallback: if header parser found 0 teams, try no-header parser
     if (teams.length === 0) {
-        console.log('Falling back to no-header parser...');
         return parseHorizontalNoHeader(rows.slice(headerIdx + 1));
     }
 
     return teams;
 }
 
-/** Fallback: horizontal format without clear headers */
 function parseHorizontalNoHeader(rows) {
     const teams = [];
     for (const row of rows) {
@@ -178,8 +157,6 @@ function parseHorizontalNoHeader(rows) {
     return teams;
 }
 
-
-
 export default function AdminTeamUpload() {
     const [preview, setPreview] = useState(null);
     const [uploading, setUploading] = useState(false);
@@ -213,41 +190,34 @@ export default function AdminTeamUpload() {
     const upload = async () => {
         if (!preview || !preview.length) return;
         setUploading(true);
-
-        // Batch insert all teams at once
-        const rows = preview.map(team => ({
-            name: team.name,
-            team_code: team.team_code,
-            members: team.members,
-            is_active: true,
-        }));
-
-        // Use raw fetch to bypass Supabase client lock
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-        const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-        // Get auth token from localStorage
-        const storageKey = `sb-${new URL(supabaseUrl).hostname.split('.')[0]}-auth-token`;
-        const stored = localStorage.getItem(storageKey);
-        const token = stored ? JSON.parse(stored).access_token : supabaseKey;
+        setResult(null);
 
         try {
-            const res = await fetch(`${supabaseUrl}/rest/v1/teams?on_conflict=team_code`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'apikey': supabaseKey,
-                    'Authorization': `Bearer ${token}`,
-                    'Prefer': 'resolution=merge-duplicates',
-                },
-                body: JSON.stringify(rows),
+            const batch = writeBatch(db);
+            let count = 0;
+
+            preview.forEach(team => {
+                if (count >= 450) return; // safety limit
+                const ref = doc(collection(db, 'teams'));
+                batch.set(ref, {
+                    name: team.name,
+                    team_code: team.team_code,
+                    members: team.members,
+                    is_active: true,
+                    created_at: serverTimestamp(),
+                });
+                count++;
             });
-            if (!res.ok) {
-                const err = await res.json();
-                setResult({ success: 0, failed: preview.length, error: err.message || err.details || 'Upload failed' });
-            } else {
-                setResult({ success: preview.length, failed: 0, error: '' });
-            }
+
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Upload timed out after 15 seconds. Check network or database rules.')), 15000)
+            );
+
+            await Promise.race([batch.commit(), timeoutPromise]);
+
+            setResult({ success: count, failed: preview.length - count, error: '' });
         } catch (e) {
+            console.error('Upload failed:', e);
             setResult({ success: 0, failed: preview.length, error: e.message });
         }
         setUploading(false);

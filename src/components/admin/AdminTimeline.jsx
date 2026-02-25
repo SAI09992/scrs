@@ -1,34 +1,16 @@
 import { useState, useEffect } from 'react';
-
-const SUPA_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPA_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const CONFIG_CODE = '__TIMELINE__';
-
-function getToken() {
-    const sk = `sb-${new globalThis.URL(SUPA_URL).hostname.split('.')[0]}-auth-token`;
-    const s = localStorage.getItem(sk);
-    return s ? JSON.parse(s).access_token : SUPA_KEY;
-}
-
-async function db(path, method = 'GET', body = null) {
-    const h = { 'Content-Type': 'application/json', 'apikey': SUPA_KEY, 'Authorization': `Bearer ${getToken()}` };
-    if (method === 'PATCH') h['Prefer'] = 'return=representation';
-    if (method === 'POST') h['Prefer'] = 'return=representation';
-    const opts = { method, headers: h };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(`${SUPA_URL}/rest/v1/${path}`, opts);
-    const text = await res.text();
-    return text ? JSON.parse(text) : null;
-}
+import { db } from '../../lib/firebaseClient';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 const S = { gold: '#ff8c00', card: 'rgba(15,10,5,0.85)', border: 'rgba(255,140,0,0.2)', text: 'rgba(255,255,255,0.85)', dim: 'rgba(255,255,255,0.5)' };
 
-// Timeline is stored as JSON in the 'members' column of a special __TIMELINE__ team row
 export async function loadTimeline() {
-    const data = await db(`teams?team_code=eq.${CONFIG_CODE}&select=members`);
-    if (data && data.length > 0 && data[0].members) {
-        return typeof data[0].members === 'string' ? JSON.parse(data[0].members) : data[0].members;
-    }
+    try {
+        const snap = await getDoc(doc(db, 'event_timeline', 'global'));
+        if (snap.exists() && snap.data().items) {
+            return snap.data().items;
+        }
+    } catch { }
     return [];
 }
 
@@ -45,13 +27,7 @@ export default function AdminTimeline() {
     };
 
     const saveAll = async (newItems) => {
-        // Check if config row exists
-        const existing = await db(`teams?team_code=eq.${CONFIG_CODE}&select=id`);
-        if (existing && existing.length > 0) {
-            await db(`teams?team_code=eq.${CONFIG_CODE}`, 'PATCH', { members: newItems, name: 'Timeline Config' });
-        } else {
-            await db('teams', 'POST', { team_code: CONFIG_CODE, name: 'Timeline Config', members: newItems, is_active: false });
-        }
+        await setDoc(doc(db, 'event_timeline', 'global'), { items: newItems }, { merge: true });
         setItems(newItems);
     };
 
@@ -101,7 +77,6 @@ export default function AdminTimeline() {
         <div style={{ fontFamily: "'Rajdhani', sans-serif", color: '#fff' }}>
             <h2 style={{ fontFamily: "'Orbitron', sans-serif", fontSize: '1.2rem', color: S.gold, letterSpacing: '0.1em', marginBottom: '25px' }}>⏳ TIMELINE MANAGEMENT</h2>
 
-            {/* Form */}
             <div style={{ background: S.card, border: `1px solid ${S.border}`, borderRadius: '10px', padding: '20px', marginBottom: '25px' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
                     <div>
@@ -123,7 +98,6 @@ export default function AdminTimeline() {
                 {editing !== null && <button onClick={() => { setEditing(null); setForm({ title: '', description: '', time: '' }); }} style={{ marginLeft: '10px', padding: '10px 20px', background: 'transparent', border: `1px solid ${S.dim}`, borderRadius: '6px', color: S.dim, fontFamily: "'Orbitron', sans-serif", fontSize: '0.7rem', cursor: 'pointer' }}>CANCEL</button>}
             </div>
 
-            {/* List */}
             {items.map((item, i) => (
                 <div key={i} style={{
                     display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 18px',

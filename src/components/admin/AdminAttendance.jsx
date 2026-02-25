@@ -1,31 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
-
-const SUPA_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPA_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-function getToken() {
-    const sk = `sb-${new globalThis.URL(SUPA_URL).hostname.split('.')[0]}-auth-token`;
-    const s = localStorage.getItem(sk);
-    return s ? JSON.parse(s).access_token : SUPA_KEY;
-}
-
-async function db(path, method = 'GET', body = null) {
-    const h = { 'Content-Type': 'application/json', 'apikey': SUPA_KEY, 'Authorization': `Bearer ${getToken()}` };
-    if (method === 'PATCH') h['Prefer'] = 'return=representation';
-    const opts = { method, headers: h };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(`${SUPA_URL}/rest/v1/${path}`, opts);
-    const text = await res.text();
-    const data = text ? JSON.parse(text) : null;
-    if (!res.ok) console.error('DB Error:', data);
-    return data;
-}
+import { db } from '../../lib/firebaseClient';
+import { collection, getDocs, updateDoc, doc, query, orderBy } from 'firebase/firestore';
 
 const S = { gold: '#ff8c00', card: 'rgba(15,10,5,0.85)', border: 'rgba(255,140,0,0.2)', text: 'rgba(255,255,255,0.85)', dim: 'rgba(255,255,255,0.5)' };
-
-// Attendance is stored inside each member object as r1, r2, r3 booleans
-// members: [{name, reg_no, r1: true, r2: false, r3: false}, ...]
 
 function parseMembers(team) {
     const m = typeof team.members === 'string' ? JSON.parse(team.members) : (team.members || []);
@@ -46,26 +24,23 @@ export default function AdminAttendance() {
     useEffect(() => { loadTeams(); }, []);
 
     const loadTeams = async () => {
-        const data = await db('teams?select=*&order=name');
-        if (data && Array.isArray(data)) setTeams(data);
+        const q = query(collection(db, 'teams'), orderBy('name'));
+        const snap = await getDocs(q);
+        setTeams(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         setLoading(false);
     };
 
     const rKey = (r) => `r${r}`;
-
     const isPresent = (member, r = round) => !!member[rKey(r)];
 
-    // Save updated members array for a team
     const saveMembers = async (teamId, members) => {
-        await db(`teams?id=eq.${teamId}`, 'PATCH', { members });
+        await updateDoc(doc(db, 'teams', teamId), { members });
     };
 
     const toggleMember = async (team, memberIdx) => {
         const members = [...parseMembers(team)];
         const key = rKey(round);
         members[memberIdx] = { ...members[memberIdx], [key]: !members[memberIdx][key] };
-
-        // Optimistic
         setTeams(prev => prev.map(t => t.id === team.id ? { ...t, members } : t));
         await saveMembers(team.id, members);
     };
@@ -74,14 +49,11 @@ export default function AdminAttendance() {
         const members = [...parseMembers(team)];
         const key = rKey(round);
         const allPresent = members.every(m => !!m[key]);
-        const newVal = !allPresent;
-        const updated = members.map(m => ({ ...m, [key]: newVal }));
-
+        const updated = members.map(m => ({ ...m, [key]: !allPresent }));
         setTeams(prev => prev.map(t => t.id === team.id ? { ...t, members: updated } : t));
         await saveMembers(team.id, updated);
     };
 
-    // Download Excel
     const downloadExcel = () => {
         const rows = [];
         teams.forEach(t => {
@@ -104,7 +76,6 @@ export default function AdminAttendance() {
         setShowDownload(false);
     };
 
-    // Upload Excel
     const handleUpload = (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -118,14 +89,12 @@ export default function AdminAttendance() {
                 const rows = XLSX.utils.sheet_to_json(ws);
                 const key = rKey(uploadRound);
 
-                // Group updates by team
                 const teamMap = {};
                 for (const row of rows) {
                     const teamName = (row['Team'] || row['team'] || '').trim();
                     const memberName = (row['Member'] || row['member'] || '').trim();
                     const status = row[`Round ${uploadRound}`] || row['Status'] || row['status'] || '';
                     const present = status.toLowerCase() === 'present';
-
                     if (!teamName || !memberName) continue;
                     if (!teamMap[teamName]) teamMap[teamName] = {};
                     teamMap[teamName][memberName] = present;
@@ -136,9 +105,7 @@ export default function AdminAttendance() {
                     const updates = teamMap[t.name];
                     if (!updates) continue;
                     const members = parseMembers(t).map(m => {
-                        if (updates[m.name] !== undefined) {
-                            return { ...m, [key]: updates[m.name] };
-                        }
+                        if (updates[m.name] !== undefined) return { ...m, [key]: updates[m.name] };
                         return m;
                     });
                     await saveMembers(t.id, members);
@@ -188,7 +155,6 @@ export default function AdminAttendance() {
                 </div>
             </div>
 
-            {/* Download Panel */}
             {showDownload && (
                 <div style={{ background: S.card, border: '1px solid rgba(0,255,255,0.2)', borderRadius: '10px', padding: '18px', marginBottom: '15px' }}>
                     <div style={{ fontFamily: "'Orbitron', sans-serif", fontSize: '0.65rem', color: '#0ff', marginBottom: '12px' }}>SELECT ROUNDS TO DOWNLOAD</div>
@@ -206,7 +172,6 @@ export default function AdminAttendance() {
                 </div>
             )}
 
-            {/* Upload Panel */}
             {showUpload && (
                 <div style={{ background: S.card, border: '1px solid rgba(74,222,128,0.2)', borderRadius: '10px', padding: '18px', marginBottom: '15px' }}>
                     <div style={{ fontFamily: "'Orbitron', sans-serif", fontSize: '0.65rem', color: '#4ade80', marginBottom: '12px' }}>UPLOAD ATTENDANCE FROM EXCEL</div>

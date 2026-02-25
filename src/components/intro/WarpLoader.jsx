@@ -17,14 +17,12 @@ export default function WarpLoader() {
         };
         window.addEventListener('resize', handleResize);
 
-        // Particles for Kalki divine energy (gold, amber, orange)
         const STAR_COUNT = 800;
         const stars = Array.from({ length: STAR_COUNT }, () => ({
             x: (Math.random() - 0.5) * w * 3,
             y: (Math.random() - 0.5) * h * 3,
             z: Math.random() * 1500 + 500,
             pz: 0,
-            // Colors: Golds, Ambers, Oranges, with rare cyan hints (Kalki eye/tech)
             color: Math.random() > 0.05
                 ? `hsla(${30 + Math.random() * 25}, ${80 + Math.random() * 20}%, ${50 + Math.random() * 30}%, 1)`
                 : `hsla(180, 80%, 60%, 0.8)`,
@@ -35,10 +33,8 @@ export default function WarpLoader() {
 
         const draw = (now) => {
             const elapsed = (now - startTime) / 1000;
-            // Accelerate over time for the 'warp' effect
             speed = 1.5 + elapsed * 6;
 
-            // Dark background with slight amber tint
             ctx.fillStyle = 'rgba(5, 3, 0, 0.2)';
             ctx.fillRect(0, 0, w, h);
 
@@ -72,7 +68,6 @@ export default function WarpLoader() {
                 ctx.lineTo(sx, sy);
                 ctx.stroke();
 
-                // Bright tip
                 ctx.beginPath();
                 ctx.fillStyle = '#fff';
                 ctx.globalAlpha = alpha * 0.9;
@@ -80,7 +75,6 @@ export default function WarpLoader() {
                 ctx.fill();
             }
 
-            // Central divine energy core (Kalki/Ashwatthama gem vibe)
             const pulse = Math.sin(elapsed * 3) * 0.1;
             const coreSize = 250 + pulse * 50;
 
@@ -94,7 +88,6 @@ export default function WarpLoader() {
             ctx.fillStyle = coreGradient;
             ctx.fillRect(cx - coreSize, cy - coreSize, coreSize * 2, coreSize * 2);
 
-            // Add a secondary subtle cyan core for the sci-fi tech contrast
             const sciFiCoreGradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreSize * 0.5);
             sciFiCoreGradient.addColorStop(0, 'rgba(0, 255, 255, 0.3)');
             sciFiCoreGradient.addColorStop(1, 'transparent');

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../../lib/supabaseClient';
+import { db } from '../../lib/firebaseClient';
+import { collection, getDocs, query, orderBy, limit, getCountFromServer } from 'firebase/firestore';
 
 export default function AdminDashboard() {
     const [stats, setStats] = useState({
@@ -12,25 +13,40 @@ export default function AdminDashboard() {
     }, []);
 
     const loadStats = async () => {
-        const { count: totalTeams } = await supabase.from('teams').select('*', { count: 'exact', head: true });
-        const { count: selected } = await supabase.from('selections').select('*', { count: 'exact', head: true });
-        const { count: submissions } = await supabase.from('submissions').select('*', { count: 'exact', head: true });
+        const teamsSnap = await getCountFromServer(collection(db, 'teams'));
+        const selectionsSnap = await getCountFromServer(collection(db, 'selections'));
+        const submissionsSnap = await getCountFromServer(collection(db, 'submissions'));
+
+        const totalTeams = teamsSnap.data().count;
+        const selected = selectionsSnap.data().count;
 
         setStats({
             totalTeams: totalTeams || 0,
-            loggedIn: 0, // Would need realtime presence
+            loggedIn: 0,
             selected: selected || 0,
             pending: (totalTeams || 0) - (selected || 0),
-            submissions: submissions || 0,
+            submissions: submissionsSnap.data().count || 0,
         });
 
-        // Recent selections as feed
-        const { data: recentSel } = await supabase
-            .from('selections')
-            .select('*, teams(name), problems(title)')
-            .order('selected_at', { ascending: false })
-            .limit(10);
-        if (recentSel) setFeed(recentSel);
+        const selQ = query(collection(db, 'selections'), orderBy('selected_at', 'desc'), limit(10));
+        const selSnap = await getDocs(selQ);
+        const feedItems = [];
+        for (const d of selSnap.docs) {
+            const sel = { id: d.id, ...d.data() };
+            try {
+                const { doc: docRef, getDoc } = await import('firebase/firestore');
+                if (sel.team_id) {
+                    const teamSnap = await getDoc(docRef(db, 'teams', sel.team_id));
+                    sel.teams = teamSnap.exists() ? teamSnap.data() : null;
+                }
+                if (sel.problem_id) {
+                    const probSnap = await getDoc(docRef(db, 'problems', sel.problem_id));
+                    sel.problems = probSnap.exists() ? probSnap.data() : null;
+                }
+            } catch { }
+            feedItems.push(sel);
+        }
+        setFeed(feedItems);
     };
 
     const cardStyle = (color) => ({
@@ -51,7 +67,6 @@ export default function AdminDashboard() {
                 ADMIN DASHBOARD
             </h2>
 
-            {/* Stats Grid */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '15px', marginBottom: '30px' }}>
                 <div style={cardStyle('0,255,255')}>
                     <div style={{ ...statNum, color: '#0ff' }}>{stats.totalTeams}</div>
@@ -65,10 +80,8 @@ export default function AdminDashboard() {
                     <div style={{ ...statNum, color: '#fbbf24' }}>{stats.pending}</div>
                     <div style={{ ...statLabel, color: '#fbbf24' }}>PENDING</div>
                 </div>
-
             </div>
 
-            {/* Activity Feed */}
             <div style={{
                 background: 'rgba(20,8,0,0.3)', border: '1px solid rgba(255,140,0,0.15)',
                 borderRadius: '8px', padding: '25px', marginBottom: '30px'
@@ -100,7 +113,6 @@ export default function AdminDashboard() {
                 ))}
             </div>
 
-            {/* Danger Zone */}
             <div style={{
                 background: 'rgba(255,0,0,0.05)', border: '1px solid rgba(255,0,0,0.3)',
                 borderRadius: '8px', padding: '25px', marginTop: '40px'
@@ -123,10 +135,16 @@ export default function AdminDashboard() {
                         const confirm2 = window.prompt("To proceed, type exactly 'DELETE' in the box below:");
                         if (confirm2 === "DELETE") {
                             try {
-                                const { error } = await supabase.rpc('reset_event_data');
-                                if (error) throw error;
+                                const collections = ['teams', 'selections', 'submissions', 'reviews', 'attendance'];
+                                const { writeBatch, doc: docRef } = await import('firebase/firestore');
+                                for (const col of collections) {
+                                    const snap = await getDocs(collection(db, col));
+                                    const batch = writeBatch(db);
+                                    snap.docs.forEach(d => batch.delete(docRef(db, col, d.id)));
+                                    await batch.commit();
+                                }
                                 alert("All event data has been successfully reset.");
-                                loadStats(); // Refresh the stats
+                                loadStats();
                             } catch (error) {
                                 console.error("Error resetting data:", error);
                                 alert("Failed to reset data: " + error.message);

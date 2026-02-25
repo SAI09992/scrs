@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../../lib/supabaseClient';
+import { db, auth } from '../../lib/firebaseClient';
+import { collection, getDocs, query, orderBy } from 'firebase/firestore';
+import { createUserWithEmailAndPassword } from 'firebase/auth';
 import * as XLSX from 'xlsx';
 
 const S = { gold: '#ff8c00', card: 'rgba(15,10,5,0.85)', border: 'rgba(255,140,0,0.2)', text: 'rgba(255,255,255,0.85)', dim: 'rgba(255,255,255,0.5)' };
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 function generatePassword(len = 8) {
     const chars = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
@@ -18,17 +17,17 @@ export default function AdminCredentials() {
     const [teams, setTeams] = useState([]);
     const [credentials, setCredentials] = useState([]);
     const [generating, setGenerating] = useState(false);
-    const [creating, setCreating] = useState(false);
-    const [createResult, setCreateResult] = useState(null);
     const [domain, setDomain] = useState('devfest.com');
     const [passwordLength, setPasswordLength] = useState(8);
     const [useTeamCodeAsPassword, setUseTeamCodeAsPassword] = useState(true);
-    const [sqlCopied, setSqlCopied] = useState(false);
 
     useEffect(() => {
-        supabase.from('teams').select('*').order('name').then(({ data }) => {
-            if (data) setTeams(data);
-        });
+        const loadTeams = async () => {
+            const q = query(collection(db, 'teams'), orderBy('name'));
+            const snap = await getDocs(q);
+            setTeams(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        };
+        loadTeams();
     }, []);
 
     const generateForAll = () => {
@@ -42,7 +41,6 @@ export default function AdminCredentials() {
         }));
         setCredentials(newCreds);
         setGenerating(false);
-        setCreateResult(null);
     };
 
     const generateForOne = (team) => {
@@ -59,99 +57,17 @@ export default function AdminCredentials() {
         });
     };
 
-    // Create users via Supabase Auth API (signup endpoint)
-    const createUsersInSupabase = async () => {
-        if (!credentials.length) return;
-        setCreating(true);
-        let created = 0, skipped = 0, failed = 0, lastError = '';
-
-        for (let i = 0; i < credentials.length; i++) {
-            const cred = credentials[i];
-            setCreateResult({ created, skipped, failed, error: '', progress: `${i + 1}/${credentials.length}` });
-
-            try {
-                const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'apikey': SUPABASE_ANON_KEY,
-                    },
-                    body: JSON.stringify({
-                        email: cred.email,
-                        password: cred.password,
-                        data: { role: 'participant', full_name: cred.team_name },
-                    }),
-                });
-                const result = await res.json();
-
-                if (result.id) {
-                    created++;
-                } else if (result.msg?.includes('already registered') || result.message?.includes('already registered') || result.code === 'user_already_exists') {
-                    skipped++;
-                } else if (result.msg?.includes('rate limit') || result.message?.includes('rate limit')) {
-                    // Wait longer on rate limit, then retry
-                    await new Promise(r => setTimeout(r, 5000));
-                    const retry = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_ANON_KEY },
-                        body: JSON.stringify({ email: cred.email, password: cred.password, data: { role: 'participant', full_name: cred.team_name } }),
-                    });
-                    const retryResult = await retry.json();
-                    if (retryResult.id) created++;
-                    else { failed++; if (!lastError) lastError = retryResult.msg || retryResult.message || 'Rate limit'; }
-                } else {
-                    failed++;
-                    if (!lastError) lastError = result.msg || result.message || result.error_description || JSON.stringify(result);
-                }
-            } catch (e) {
-                failed++;
-                if (!lastError) lastError = e.message;
-            }
-
-            // Delay between signups to avoid rate limit
-            if (i < credentials.length - 1) {
-                await new Promise(r => setTimeout(r, 1500));
-            }
-        }
-        setCreateResult({ created, skipped, failed, error: lastError });
-        setCreating(false);
-    };
-
-    const generateSQL = () => {
-        if (!credentials.length) return '';
-        let sql = `CREATE OR REPLACE FUNCTION create_user(\n  user_email TEXT, user_password TEXT, user_role TEXT DEFAULT 'participant', user_name TEXT DEFAULT ''\n) RETURNS UUID AS $$\nDECLARE new_id UUID := gen_random_uuid();\nBEGIN\n  INSERT INTO auth.users (id, instance_id, email, encrypted_password, email_confirmed_at, role, aud, raw_user_meta_data, created_at, updated_at)\n  VALUES (new_id, '00000000-0000-0000-0000-000000000000', user_email, crypt(user_password, gen_salt('bf', 10)), now(), 'authenticated', 'authenticated', jsonb_build_object('role', user_role, 'full_name', user_name), now(), now());\n  INSERT INTO auth.identities (id, user_id, provider_id, identity_data, provider, created_at, updated_at, last_sign_in_at)\n  VALUES (new_id, new_id, user_email, jsonb_build_object('sub', new_id, 'email', user_email), 'email', now(), now(), now());\n  RETURN new_id;\nEND; $$ LANGUAGE plpgsql SECURITY DEFINER;\n\n`;
-        sql += `DO $$\nBEGIN\n`;
-        credentials.forEach(c => {
-            sql += `  IF NOT EXISTS (SELECT 1 FROM auth.users WHERE email = '${c.email.replace(/'/g, "''")}') THEN\n`;
-            sql += `    PERFORM create_user('${c.email.replace(/'/g, "''")}', '${c.password.replace(/'/g, "''")}', 'participant', '${c.team_name.replace(/'/g, "''")}');\n`;
-            sql += `  END IF;\n`;
-        });
-        sql += `END $$;\n`;
-        return sql;
-    };
-
-    const copySQL = async () => {
-        const sql = generateSQL();
-        try { await navigator.clipboard.writeText(sql); } catch {
-            const ta = document.createElement('textarea'); ta.value = sql; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
-        }
-        setSqlCopied(true); setTimeout(() => setSqlCopied(false), 3000);
-    };
-
     const downloadExcel = () => {
         if (!credentials.length) return;
-
         const data = credentials.map(c => ({
             'Team Name': c.team_name,
             'Team Code': c.team_code,
             'Email': c.email,
             'Password': c.password
         }));
-
         const worksheet = XLSX.utils.json_to_sheet(data);
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, 'Credentials');
-
         XLSX.writeFile(workbook, 'team_credentials.xlsx');
     };
 
@@ -166,7 +82,12 @@ export default function AdminCredentials() {
         <div style={{ fontFamily: "'Rajdhani', sans-serif", color: '#fff' }}>
             <h2 style={{ fontFamily: "'Orbitron', sans-serif", fontSize: '1.2rem', color: S.gold, letterSpacing: '0.1em', marginBottom: '25px' }}>🔑 TEAM CREDENTIALS</h2>
 
-            {/* Config */}
+            <div style={{ background: 'rgba(0,255,255,0.04)', border: '1px solid rgba(0,255,255,0.15)', borderRadius: '8px', padding: '14px 18px', marginBottom: '20px' }}>
+                <div style={{ fontFamily: "'Rajdhani', sans-serif", fontSize: '0.9rem', color: '#0ff' }}>
+                    ℹ️ With Firebase, teams log in using <strong>team codes</strong> directly — no email/password accounts needed. Use this page to generate credentials for reference or export only.
+                </div>
+            </div>
+
             <div style={{ background: S.card, border: `1px solid ${S.border}`, borderRadius: '10px', padding: '20px', marginBottom: '20px' }}>
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
                     <div>
@@ -191,40 +112,21 @@ export default function AdminCredentials() {
                 </div>
             </div>
 
-            {/* Action Buttons */}
             {credentials.length > 0 && (
                 <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '20px' }}>
-                    <button onClick={createUsersInSupabase} disabled={creating} style={{ ...btnStyle(creating ? 'rgba(0,200,255,0.08)' : 'rgba(0,200,255,0.15)', creating ? 'rgba(0,200,255,0.3)' : '#0ff', creating ? 'rgba(0,200,255,0.5)' : '#0ff'), opacity: creating ? 0.8 : 1 }}>
-                        {creating ? `⏳ CREATING... ${createResult?.progress || ''}` : `🚀 CREATE ${credentials.length} USERS IN SUPABASE`}
-                    </button>
-                    <button onClick={copySQL} style={btnStyle(sqlCopied ? 'rgba(74,222,128,0.2)' : 'rgba(138,43,226,0.15)', sqlCopied ? '#4ade80' : '#a78bfa', sqlCopied ? '#4ade80' : '#a78bfa')}>
-                        {sqlCopied ? '✅ COPIED!' : '📋 COPY SQL'}
-                    </button>
                     <button onClick={downloadExcel} style={btnStyle('rgba(74,222,128,0.12)', 'rgba(74,222,128,0.4)', '#4ade80')}>
                         📥 EXCEL
                     </button>
                 </div>
             )}
 
-            {/* Create Result */}
-            {createResult && (
-                <div style={{ padding: '15px 20px', background: createResult.failed > 0 ? 'rgba(255,50,50,0.08)' : 'rgba(74,222,128,0.08)', border: `1px solid ${createResult.failed > 0 ? 'rgba(255,50,50,0.3)' : 'rgba(74,222,128,0.3)'}`, borderRadius: '8px', marginBottom: '20px' }}>
-                    <span style={{ fontFamily: "'Orbitron', sans-serif", fontSize: '0.75rem', color: createResult.created > 0 ? '#4ade80' : S.dim }}>
-                        {createResult.created > 0 && `✅ ${createResult.created} created `}
-                        {createResult.skipped > 0 && `⏭️ ${createResult.skipped} skipped (already exist) `}
-                        {createResult.failed > 0 && `❌ ${createResult.failed} failed`}
-                    </span>
-                    {createResult.error && <div style={{ color: '#ff6b6b', fontSize: '0.85rem', marginTop: '6px' }}>Error: {createResult.error}</div>}
-                </div>
-            )}
-
-            {/* Credentials Table */}
             {credentials.length > 0 && (
                 <div style={{ background: S.card, border: `1px solid ${S.border}`, borderRadius: '10px', overflow: 'hidden' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead>
                             <tr style={{ borderBottom: `1px solid ${S.border}` }}>
                                 <th style={{ padding: '12px 16px', textAlign: 'left', fontFamily: "'Orbitron', sans-serif", fontSize: '0.6rem', color: S.gold, letterSpacing: '0.08em' }}>TEAM</th>
+                                <th style={{ padding: '12px 16px', textAlign: 'left', fontFamily: "'Orbitron', sans-serif", fontSize: '0.6rem', color: S.gold, letterSpacing: '0.08em' }}>TEAM CODE</th>
                                 <th style={{ padding: '12px 16px', textAlign: 'left', fontFamily: "'Orbitron', sans-serif", fontSize: '0.6rem', color: S.gold, letterSpacing: '0.08em' }}>EMAIL</th>
                                 <th style={{ padding: '12px 16px', textAlign: 'left', fontFamily: "'Orbitron', sans-serif", fontSize: '0.6rem', color: S.gold, letterSpacing: '0.08em' }}>PASSWORD</th>
                                 <th style={{ padding: '12px 16px', textAlign: 'center', fontFamily: "'Orbitron', sans-serif", fontSize: '0.6rem', color: S.gold, letterSpacing: '0.08em' }}>🔄</th>
@@ -234,6 +136,7 @@ export default function AdminCredentials() {
                             {credentials.map((c, i) => (
                                 <tr key={c.team_id || i} style={{ borderBottom: i < credentials.length - 1 ? `1px solid rgba(255,140,0,0.06)` : 'none' }}>
                                     <td style={{ padding: '10px 16px', color: S.text }}>{c.team_name}</td>
+                                    <td style={{ padding: '10px 16px', color: '#4ade80', fontFamily: "'Orbitron', sans-serif", fontSize: '0.8rem' }}>{c.team_code}</td>
                                     <td style={{ padding: '10px 16px', color: '#0ff', fontSize: '0.9rem' }}>{c.email}</td>
                                     <td style={{ padding: '10px 16px', color: '#4ade80', fontFamily: "'Courier New', monospace", fontSize: '0.9rem' }}>{c.password}</td>
                                     <td style={{ padding: '10px 16px', textAlign: 'center' }}>

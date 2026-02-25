@@ -1,135 +1,125 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../../lib/supabaseClient';
+import { db } from '../../lib/firebaseClient';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, orderBy, serverTimestamp, getDoc } from 'firebase/firestore';
 
 export default function AdminSelections() {
     const [selections, setSelections] = useState([]);
-    const [teams, setTeams] = useState([]);
+    const [tab, setTab] = useState('all');
 
     useEffect(() => { loadData(); }, []);
 
     const loadData = async () => {
-        const { data: sel } = await supabase.from('selections').select('*, teams(name), problems(title)').order('selected_at', { ascending: false });
-        if (sel) setSelections(sel);
-        const { data: t } = await supabase.from('teams').select('id, name');
-        if (t) setTeams(t);
-    };
-
-    const toggleLock = async (id, current) => {
-        await supabase.from('selections').update({ is_locked: !current, locked_by: 'admin' }).eq('id', id);
-        loadData();
-    };
-
-
-
-    const deleteSelection = async (id) => {
-        if (confirm('Remove this selection?')) {
-            await supabase.from('selections').delete().eq('id', id);
-            loadData();
+        try {
+            const snap = await getDocs(collection(db, 'selections'));
+            const items = [];
+            for (const d of snap.docs) {
+                const sel = { id: d.id, ...d.data() };
+                try {
+                    if (sel.team_id) {
+                        const teamSnap = await getDoc(doc(db, 'teams', sel.team_id));
+                        sel.teams = teamSnap.exists() ? teamSnap.data() : null;
+                    }
+                    if (sel.problem_id) {
+                        const probSnap = await getDoc(doc(db, 'problems', sel.problem_id));
+                        sel.problems = probSnap.exists() ? probSnap.data() : null;
+                    }
+                } catch { }
+                items.push(sel);
+            }
+            items.sort((a, b) => new Date(b.selected_at || 0) - new Date(a.selected_at || 0));
+            setSelections(items);
+        } catch (error) {
+            console.error('Failed to load selections:', error);
+            alert('Error loading selections. Check console.');
         }
     };
 
-    const selectedTeamIds = new Set(selections.map(s => s.team_id));
-    const notSelected = teams.filter(t => !selectedTeamIds.has(t.id) && t.team_code !== '__TIMELINE__');
+    const toggleLock = async (id, current) => {
+        try {
+            await updateDoc(doc(db, 'selections', id), { locked_at: current ? null : new Date().toISOString() });
+            loadData();
+        } catch (error) {
+            console.error(error);
+            alert('Failed to update selection lock status: ' + error.message);
+        }
+    };
 
-    const [tab, setTab] = useState('selected');
+    const deleteSelection = async (id) => {
+        if (!window.confirm('Remove this selection?')) return;
+        try {
+            await deleteDoc(doc(db, 'selections', id));
+            loadData();
+        } catch (error) {
+            console.error(error);
+            alert('Failed to delete selection: ' + error.message);
+        }
+    };
+
+    const locked = selections.filter(s => s.locked_at);
+    const unlocked = selections.filter(s => !s.locked_at);
+
+    const filtered = tab === 'locked' ? locked : tab === 'unlocked' ? unlocked : selections;
 
     const tabBtn = (key, label, count, color) => (
         <button onClick={() => setTab(key)} style={{
-            padding: '8px 18px', borderRadius: '6px', cursor: 'pointer',
+            padding: '8px 16px', borderRadius: '6px', cursor: 'pointer',
             background: tab === key ? `rgba(${color},0.15)` : 'transparent',
             border: `1px solid ${tab === key ? `rgba(${color},0.4)` : 'rgba(255,255,255,0.1)'}`,
             color: tab === key ? `rgb(${color})` : 'rgba(255,255,255,0.4)',
             fontFamily: "'Orbitron', sans-serif", fontSize: '0.6rem', letterSpacing: '0.08em',
         }}>
-            {label} <span style={{ marginLeft: '6px', padding: '2px 6px', borderRadius: '8px', background: `rgba(${color},0.15)`, fontSize: '0.55rem' }}>{count}</span>
+            {label} ({count})
         </button>
     );
 
     return (
         <div style={{ maxWidth: '1000px' }}>
-            <h2 style={{ fontFamily: "'Orbitron', sans-serif", fontSize: '1rem', color: '#ff8c00', letterSpacing: '0.1em', marginBottom: '20px', textShadow: '0 0 8px rgba(255,140,0,0.3)' }}>
-                SELECTION MONITORING
+            <h2 style={{ fontFamily: "'Orbitron', sans-serif", fontSize: '1rem', color: '#ff8c00', letterSpacing: '0.1em', marginBottom: '25px', textShadow: '0 0 8px rgba(255,140,0,0.3)' }}>
+                PROBLEM SELECTIONS
             </h2>
 
             <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
-                {tabBtn('selected', 'SELECTED', selections.length, '0,255,255')}
-                {tabBtn('notselected', 'NOT SELECTED', notSelected.length, '255,100,100')}
+                {tabBtn('all', 'ALL', selections.length, '255,140,0')}
+                {tabBtn('locked', 'LOCKED', locked.length, '0,255,100')}
+                {tabBtn('unlocked', 'UNLOCKED', unlocked.length, '255,180,0')}
             </div>
 
-            {tab === 'selected' ? (
-                <div style={{ background: 'rgba(0,10,20,0.4)', border: '1px solid rgba(255,140,0,0.1)', borderRadius: '8px', overflow: 'hidden' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                        <thead>
-                            <tr style={{ borderBottom: '1px solid rgba(255,140,0,0.15)' }}>
-                                {['Team', 'Problem', 'Time', 'Status', 'Actions'].map((h) => (
-                                    <th key={h} style={{ padding: '12px 15px', textAlign: 'left', fontFamily: "'Orbitron', sans-serif", fontSize: '0.6rem', color: 'rgba(255,140,0,0.6)', letterSpacing: '0.1em' }}>{h}</th>
-                                ))}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {selections.map((s) => (
-                                <tr key={s.id} style={{ borderBottom: '1px solid rgba(255,140,0,0.06)' }}>
-                                    <td style={{ padding: '10px 15px', fontFamily: "'Rajdhani', sans-serif", color: '#fff', fontSize: '0.95rem' }}>{s.teams?.name}</td>
-                                    <td style={{ padding: '10px 15px', fontFamily: "'Rajdhani', sans-serif", color: 'rgba(255,255,255,0.7)' }}>{s.problems?.title}</td>
-                                    <td style={{ padding: '10px 15px', fontFamily: "'Rajdhani', sans-serif", color: 'rgba(255,255,255,0.4)', fontSize: '0.85rem' }}>
-                                        {s.selected_at ? new Date(s.selected_at).toLocaleString() : '—'}
-                                    </td>
-                                    <td style={{ padding: '10px 15px' }}>
-                                        <span style={{
-                                            padding: '3px 10px', borderRadius: '10px', fontSize: '0.7rem',
-                                            background: s.is_locked ? 'rgba(255,50,50,0.1)' : 'rgba(0,255,100,0.1)',
-                                            color: s.is_locked ? '#ff6b6b' : '#4ade80', fontFamily: "'Rajdhani', sans-serif",
-                                        }}>
-                                            {s.is_locked ? 'Locked' : 'Unlocked'}
-                                        </span>
-                                    </td>
-                                    <td style={{ padding: '10px 15px', display: 'flex', gap: '6px' }}>
-                                        <button onClick={() => toggleLock(s.id, s.is_locked)} style={{
-                                            padding: '4px 10px', borderRadius: '4px', cursor: 'pointer',
-                                            background: 'transparent', border: '1px solid rgba(255,255,255,0.15)',
-                                            color: 'rgba(255,255,255,0.5)', fontSize: '0.55rem', fontFamily: "'Orbitron', sans-serif",
-                                        }}>
-                                            {s.is_locked ? 'UNLOCK' : 'LOCK'}
-                                        </button>
-                                        <button onClick={() => deleteSelection(s.id)} style={{
-                                            padding: '4px 10px', borderRadius: '4px', cursor: 'pointer',
-                                            background: 'rgba(255,50,50,0.1)', border: '1px solid rgba(255,50,50,0.3)',
-                                            color: '#ff6b6b', fontSize: '0.55rem', fontFamily: "'Orbitron', sans-serif",
-                                        }}>REMOVE</button>
-                                    </td>
-                                </tr>
-                            ))}
-                            {selections.length === 0 && (
-                                <tr><td colSpan={5} style={{ padding: '30px', textAlign: 'center', color: 'rgba(255,255,255,0.3)', fontFamily: "'Rajdhani', sans-serif" }}>No selections yet.</td></tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {notSelected.length === 0 ? (
-                        <div style={{ padding: '30px', textAlign: 'center', color: 'rgba(0,255,100,0.6)', fontFamily: "'Orbitron', sans-serif", fontSize: '0.75rem', letterSpacing: '0.1em' }}>
-                            ✓ ALL TEAMS HAVE SELECTED A PROBLEM
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {filtered.map((s) => (
+                    <div key={s.id} style={{
+                        background: 'rgba(0,10,20,0.4)', border: '1px solid rgba(255,140,0,0.1)',
+                        borderRadius: '8px', padding: '15px 20px',
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    }}>
+                        <div>
+                            <div style={{ fontFamily: "'Orbitron', sans-serif", fontSize: '0.8rem', color: '#fff' }}>{s.teams?.name || 'Unknown'}</div>
+                            <div style={{ fontFamily: "'Rajdhani', sans-serif", fontSize: '0.9rem', color: '#ff8c00', marginTop: '2px' }}>{s.problems?.title || 'Unknown'}</div>
+                            <div style={{ fontFamily: "'Rajdhani', sans-serif", fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', marginTop: '2px' }}>
+                                {s.selected_at ? new Date(s.selected_at).toLocaleString() : ''}
+                            </div>
                         </div>
-                    ) : notSelected.map((t) => (
-                        <div key={t.id} style={{
-                            display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 18px',
-                            background: 'rgba(255,30,30,0.04)', border: '1px solid rgba(255,100,100,0.15)',
-                            borderRadius: '8px',
-                        }}>
-                            <span style={{ color: '#ff6b6b', fontSize: '0.8rem' }}>⚠</span>
-                            <span style={{ flex: 1, fontFamily: "'Rajdhani', sans-serif", fontSize: '1rem', color: '#fff' }}>{t.name}</span>
-                            <span style={{
-                                padding: '3px 10px', borderRadius: '10px', fontSize: '0.65rem',
-                                background: 'rgba(255,100,100,0.1)', color: '#ff6b6b',
-                                fontFamily: "'Orbitron', sans-serif", letterSpacing: '0.08em',
-                            }}>
-                                NO PS SELECTED
-                            </span>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                            <button onClick={() => toggleLock(s.id, s.locked_at)} style={{
+                                padding: '5px 12px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.55rem',
+                                fontFamily: "'Orbitron', sans-serif",
+                                background: s.locked_at ? 'rgba(0,255,100,0.08)' : 'rgba(255,180,0,0.08)',
+                                border: `1px solid ${s.locked_at ? 'rgba(0,255,100,0.3)' : 'rgba(255,180,0,0.3)'}`,
+                                color: s.locked_at ? '#4ade80' : '#fbbf24',
+                            }}>{s.locked_at ? '🔓 UNLOCK' : '🔒 LOCK'}</button>
+                            <button onClick={() => deleteSelection(s.id)} style={{
+                                padding: '5px 12px', borderRadius: '4px', cursor: 'pointer',
+                                background: 'transparent', border: '1px solid rgba(255,50,50,0.3)',
+                                color: '#ff6b6b', fontSize: '0.55rem', fontFamily: "'Orbitron', sans-serif",
+                            }}>DEL</button>
                         </div>
-                    ))}
-                </div>
-            )}
+                    </div>
+                ))}
+                {filtered.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '40px', color: 'rgba(255,255,255,0.4)', fontFamily: "'Rajdhani', sans-serif" }}>
+                        No selections yet.
+                    </div>
+                )}
+            </div>
         </div>
     );
 }

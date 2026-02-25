@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { supabase } from '../../lib/supabaseClient';
+import { db } from '../../lib/firebaseClient';
+import { collection, getDocs, query, orderBy, getDoc, doc } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 
 export default function AdminReports() {
@@ -7,20 +8,19 @@ export default function AdminReports() {
 
     const downloadExcel = (data, filename) => {
         if (!data.length) return alert('No data to export');
-
         const worksheet = XLSX.utils.json_to_sheet(data);
         const workbook = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(workbook, worksheet, 'Data');
-
         XLSX.writeFile(workbook, filename);
     };
 
     const exportTeams = async () => {
         setLoading('teams');
         try {
-            const { data, error } = await supabase.from('teams').select('*').order('name');
-            if (error) throw error;
-            if (data) downloadExcel(data, 'teams_list.xlsx');
+            const q = query(collection(db, 'teams'), orderBy('name'));
+            const snap = await getDocs(q);
+            const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+            if (data.length) downloadExcel(data.map(t => ({ ...t, members: JSON.stringify(t.members) })), 'teams_list.xlsx');
         } catch (error) {
             alert('Failed to export teams: ' + error.message);
         } finally {
@@ -31,15 +31,18 @@ export default function AdminReports() {
     const exportSelections = async () => {
         setLoading('selections');
         try {
-            const { data, error } = await supabase.from('selections').select('team_id, problem_id, selected_at, is_locked, teams(name), problems(title)');
-            if (error) throw error;
-            if (data) {
-                const flat = data.map((s) => ({
-                    team: s.teams?.name, problem: s.problems?.title,
-                    selected_at: s.selected_at, is_locked: s.is_locked,
-                }));
-                downloadExcel(flat, 'problem_selections.xlsx');
+            const snap = await getDocs(collection(db, 'selections'));
+            const flat = [];
+            for (const d of snap.docs) {
+                const s = d.data();
+                let teamName = '', problemTitle = '';
+                try {
+                    if (s.team_id) { const t = await getDoc(doc(db, 'teams', s.team_id)); teamName = t.exists() ? t.data().name : ''; }
+                    if (s.problem_id) { const p = await getDoc(doc(db, 'problems', s.problem_id)); problemTitle = p.exists() ? p.data().title : ''; }
+                } catch { }
+                flat.push({ team: teamName, problem: problemTitle, selected_at: s.selected_at, is_locked: !!s.locked_at });
             }
+            downloadExcel(flat, 'problem_selections.xlsx');
         } catch (error) {
             alert('Failed to export selections: ' + error.message);
         } finally {
@@ -50,15 +53,15 @@ export default function AdminReports() {
     const exportSubmissions = async () => {
         setLoading('submissions');
         try {
-            const { data, error } = await supabase.from('submissions').select('*, teams(name)');
-            if (error) throw error;
-            if (data) {
-                const flat = data.map((s) => ({
-                    team: s.teams?.name, repo_link: s.repo_link, status: s.status,
-                    submitted_at: s.submitted_at, notes: s.notes,
-                }));
-                downloadExcel(flat, 'submissions.xlsx');
+            const snap = await getDocs(collection(db, 'submissions'));
+            const flat = [];
+            for (const d of snap.docs) {
+                const s = d.data();
+                let teamName = '';
+                try { if (s.team_id) { const t = await getDoc(doc(db, 'teams', s.team_id)); teamName = t.exists() ? t.data().name : ''; } } catch { }
+                flat.push({ team: teamName, repo_link: s.repo_link, status: s.status, submitted_at: s.submitted_at, notes: s.notes });
             }
+            downloadExcel(flat, 'submissions.xlsx');
         } catch (error) {
             alert('Failed to export submissions: ' + error.message);
         } finally {
@@ -69,15 +72,15 @@ export default function AdminReports() {
     const exportScores = async () => {
         setLoading('scores');
         try {
-            const { data, error } = await supabase.from('reviews').select('*, submissions(teams(name))');
-            if (error) throw error;
-            if (data) {
-                const flat = data.map((r) => ({
-                    team: r.submissions?.teams?.name, judge: r.judge_name,
-                    total_score: r.total_score, ...r.scores, comments: r.comments,
-                }));
-                downloadExcel(flat, 'scores_summary.xlsx');
+            const snap = await getDocs(collection(db, 'reviews'));
+            const flat = [];
+            for (const d of snap.docs) {
+                const r = d.data();
+                let teamName = '';
+                try { if (r.team_id) { const t = await getDoc(doc(db, 'teams', r.team_id)); teamName = t.exists() ? t.data().name : ''; } } catch { }
+                flat.push({ team: teamName, judge: r.reviewer_name, total_score: r.total_score, ...r.scores, comments: r.comments });
             }
+            downloadExcel(flat, 'scores_summary.xlsx');
         } catch (error) {
             alert('Failed to export scores: ' + error.message);
         } finally {

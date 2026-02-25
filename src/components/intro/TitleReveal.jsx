@@ -11,7 +11,6 @@ export default function TitleReveal() {
         return () => { clearTimeout(t1); clearTimeout(t2); };
     }, []);
 
-    // Canvas for ancient dust / mystic atmosphere
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
@@ -25,7 +24,6 @@ export default function TitleReveal() {
         };
         window.addEventListener('resize', handleResize);
 
-        // Ancient dust motes
         const particles = Array.from({ length: 150 }, () => ({
             x: Math.random() * w,
             y: Math.random() * h,
@@ -42,7 +40,6 @@ export default function TitleReveal() {
             time += 0.01;
             ctx.clearRect(0, 0, w, h);
 
-            // Deep, moody background (Kashi / Shambhala dark ambiance)
             const bgGradient = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w);
             bgGradient.addColorStop(0, '#1a1005');
             bgGradient.addColorStop(0.5, '#0a0500');
@@ -50,7 +47,6 @@ export default function TitleReveal() {
             ctx.fillStyle = bgGradient;
             ctx.fillRect(0, 0, w, h);
 
-            // Massive glowing halo (like the Complex/Energy source)
             ctx.globalCompositeOperation = 'screen';
             const haloGrad = ctx.createRadialGradient(w / 2, h / 2 - 100, 0, w / 2, h / 2 - 100, 600);
             haloGrad.addColorStop(0, 'rgba(255, 170, 50, 0.15)');
@@ -60,7 +56,6 @@ export default function TitleReveal() {
             ctx.fillRect(0, 0, w, h);
             ctx.globalCompositeOperation = 'source-over';
 
-            // Dust particles
             for (const p of particles) {
                 p.x += p.vx + Math.sin(time + p.y * 0.01) * 0.5; // Swirling motion
                 p.y += p.vy;
@@ -75,7 +70,6 @@ export default function TitleReveal() {
                 const currentAlpha = p.alpha * (0.5 + Math.sin(time * p.flickerSpeed * 100) * 0.5);
 
                 ctx.beginPath();
-                // Golden/Amber dust
                 ctx.fillStyle = `rgba(255, 180, 50, ${currentAlpha})`;
                 ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
                 ctx.fill();

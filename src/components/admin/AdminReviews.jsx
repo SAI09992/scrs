@@ -1,30 +1,7 @@
 import { useState, useEffect } from 'react';
+import { db } from '../../lib/firebaseClient';
 import * as XLSX from 'xlsx';
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-function getToken() {
-    const storageKey = `sb-${new URL(SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
-    const stored = localStorage.getItem(storageKey);
-    return stored ? JSON.parse(stored).access_token : SUPABASE_KEY;
-}
-
-async function dbFetch(path, method = 'GET', body = null) {
-    const headers = {
-        'Content-Type': 'application/json',
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${getToken()}`,
-    };
-    if (method === 'POST') headers['Prefer'] = 'return=representation';
-    const opts = { method, headers };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, opts);
-    if (!res.ok) throw new Error((await res.json()).message || 'Request failed');
-    const text = await res.text();
-    return text ? JSON.parse(text) : null;
-}
-
+import { collection, getDocs, addDoc, doc, query, where, orderBy, getDoc } from 'firebase/firestore';
 import { getEvalCriteria } from './AdminEvaluation';
 
 export default function AdminReviews() {
@@ -46,87 +23,73 @@ export default function AdminReviews() {
 
     useEffect(() => {
         if (form.submission_id) {
-            dbFetch(`reviews?select=round,comments,judge_name,submissions!inner(team_id)&submissions.team_id=eq.${form.submission_id}&order=round.desc,reviewed_at.desc`)
-                .then(res => {
-                    const past = (res || []).filter(r => r.round < round && r.comments && r.comments.trim() !== '');
-                    setPastComments(past);
-                })
-                .catch(() => setPastComments([]));
+            loadPastComments(form.submission_id);
         } else {
             setPastComments([]);
         }
     }, [form.submission_id, round]);
 
+    const loadPastComments = async (teamId) => {
+        try {
+            const q = query(collection(db, 'reviews'), where('team_id', '==', teamId));
+            const snap = await getDocs(q);
+            const past = snap.docs
+                .map(d => d.data())
+                .filter(r => r.round < round && r.comments && r.comments.trim() !== '')
+                .sort((a, b) => (b.round || 0) - (a.round || 0));
+            setPastComments(past);
+        } catch {
+            setPastComments([]);
+        }
+    };
+
     const handleExport = async () => {
         try {
-            const allReviews = await dbFetch('reviews?select=round,total_score,judge_name,comments,scores,reviewed_at,submissions(teams(name,team_code))');
-            if (!allReviews || allReviews.length === 0) {
-                setMessage('❌ No reviews to export.');
-                return;
+            const snap = await getDocs(collection(db, 'reviews'));
+            const allReviews = [];
+            for (const d of snap.docs) {
+                const r = { id: d.id, ...d.data() };
+                try {
+                    if (r.team_id) {
+                        const teamSnap = await getDoc(doc(db, 'teams', r.team_id));
+                        r.teamName = teamSnap.exists() ? teamSnap.data().name : 'Unknown';
+                        r.teamCode = teamSnap.exists() ? teamSnap.data().team_code : 'N/A';
+                    }
+                } catch { }
+                allReviews.push(r);
             }
+            if (!allReviews.length) { setMessage('❌ No reviews to export.'); return; }
 
-            // Sheet 1: Combined Scores
             const teamsMap = {};
             allReviews.forEach(r => {
-                const teamName = r.submissions?.teams?.name || 'Unknown Team';
-                const teamCode = r.submissions?.teams?.team_code || 'N/A';
+                const teamName = r.teamName || 'Unknown';
+                const teamCode = r.teamCode || 'N/A';
                 if (!teamsMap[teamName]) {
                     teamsMap[teamName] = { Team: teamName, 'Team Code': teamCode, 'R1 Total': 0, 'R2 Total': 0, 'Combined Total': 0 };
                 }
-
                 const rnd = r.round;
                 teamsMap[teamName][`R${rnd} Total`] = Math.max(teamsMap[teamName][`R${rnd} Total`], r.total_score || 0);
-
                 if (r.comments) {
-                    const commentKey = `R${rnd} Comments`;
-                    teamsMap[teamName][commentKey] = teamsMap[teamName][commentKey]
-                        ? teamsMap[teamName][commentKey] + ' | ' + r.comments
-                        : r.comments;
+                    const ck = `R${rnd} Comments`;
+                    teamsMap[teamName][ck] = teamsMap[teamName][ck] ? teamsMap[teamName][ck] + ' | ' + r.comments : r.comments;
                 }
             });
-
-            Object.values(teamsMap).forEach(t => {
-                t['Combined Total'] = (t['R1 Total'] || 0) + (t['R2 Total'] || 0);
-            });
-
+            Object.values(teamsMap).forEach(t => { t['Combined Total'] = (t['R1 Total'] || 0) + (t['R2 Total'] || 0); });
             const combinedData = Object.values(teamsMap).sort((a, b) => b['Combined Total'] - a['Combined Total']);
 
-            // Sheet 2: Current Sorted View
-            // Use the same sorting logic as the UI for the currently selected round
-            const currentRoundReviews = allReviews.filter(r => r.round === round);
-            const sortedCurrentRound = currentRoundReviews.sort((a, b) => {
-                if (sortBy === 'score') return b.total_score - a.total_score;
-                return new Date(b.reviewed_at) - new Date(a.reviewed_at);
-            }).map(r => ({
-                Team: r.submissions?.teams?.name || 'Unknown',
-                'Team Code': r.submissions?.teams?.team_code || 'N/A',
-                Judge: r.judge_name,
-                'Total Score': r.total_score,
-                Comments: r.comments || '',
-                ...(r.scores || {})
-            }));
+            const currentRoundReviews = allReviews.filter(r => r.round === round)
+                .sort((a, b) => sortBy === 'score' ? b.total_score - a.total_score : new Date(b.reviewed_at) - new Date(a.reviewed_at))
+                .map(r => ({ Team: r.teamName, 'Team Code': r.teamCode, Judge: r.judge_name, 'Total Score': r.total_score, Comments: r.comments || '', ...(r.scores || {}) }));
 
-            // Sheet 3: All Detailed Reviews
             const detailedData = allReviews.map(r => ({
-                Round: r.round,
-                Team: r.submissions?.teams?.name || 'Unknown',
-                'Team Code': r.submissions?.teams?.team_code || 'N/A',
-                Judge: r.judge_name,
-                'Total Score': r.total_score,
-                Comments: r.comments || '',
-                ...(r.scores || {})
+                Round: r.round, Team: r.teamName, 'Team Code': r.teamCode, Judge: r.judge_name,
+                'Total Score': r.total_score, Comments: r.comments || '', ...(r.scores || {})
             })).sort((a, b) => a.Round - b.Round || b['Total Score'] - a['Total Score']);
 
             const wb = XLSX.utils.book_new();
-
             XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(combinedData), "Combined Scores");
-
-            if (sortedCurrentRound.length > 0) {
-                XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sortedCurrentRound), `R${round} Sorted (${sortBy})`);
-            }
-
+            if (currentRoundReviews.length > 0) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(currentRoundReviews), `R${round} Sorted (${sortBy})`);
             XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detailedData), "All Detailed Reviews");
-
             XLSX.writeFile(wb, `SCRS_Evaluations_R${round}_${sortBy}.xlsx`);
             setMessage('✅ Export successful!');
         } catch (e) {
@@ -136,12 +99,33 @@ export default function AdminReviews() {
 
     const loadData = async () => {
         try {
-            const t = await dbFetch('teams?select=id,name,team_code,submissions(id,repo_link)&is_active=eq.true');
-            if (t) setSubmissions(t);
+            const teamsSnap = await getDocs(query(collection(db, 'teams'), where('is_active', '==', true)));
+            const teamsData = [];
+            for (const d of teamsSnap.docs) {
+                const t = { id: d.id, ...d.data() };
+                const subQ = query(collection(db, 'submissions'), where('team_id', '==', d.id));
+                const subSnap = await getDocs(subQ);
+                t.submissions = subSnap.docs.map(s => ({ id: s.id, ...s.data() }));
+                teamsData.push(t);
+            }
+            setSubmissions(teamsData);
         } catch { }
+
         try {
-            const r = await dbFetch(`reviews?select=id,submission_id,judge_name,scores,total_score,comments,round,submissions(teams(name))&round=eq.${round}&order=reviewed_at.desc`);
-            if (r) setReviews(r);
+            const rQ = query(collection(db, 'reviews'), where('round', '==', round), orderBy('reviewed_at', 'desc'));
+            const rSnap = await getDocs(rQ);
+            const reviewsData = [];
+            for (const d of rSnap.docs) {
+                const r = { id: d.id, ...d.data() };
+                if (r.team_id) {
+                    try {
+                        const teamSnap = await getDoc(doc(db, 'teams', r.team_id));
+                        r.teamName = teamSnap.exists() ? teamSnap.data().name : 'Unknown';
+                    } catch { r.teamName = 'Unknown'; }
+                }
+                reviewsData.push(r);
+            }
+            setReviews(reviewsData);
         } catch { setReviews([]); }
     };
 
@@ -157,26 +141,10 @@ export default function AdminReviews() {
         setMessage('');
 
         const total = metrics.reduce((sum, m) => sum + (Number(scores[m.key]) || 0), 0);
-        const selectedTeam = submissions.find(t => t.id === form.submission_id);
 
         try {
-            let actualSubmissionId = null;
-            if (selectedTeam && selectedTeam.submissions && selectedTeam.submissions.length > 0) {
-                actualSubmissionId = selectedTeam.submissions[0].id;
-            } else {
-                const newSub = await dbFetch('submissions', 'POST', {
-                    team_id: form.submission_id,
-                    status: 'valid'
-                });
-                if (newSub && newSub.length > 0) {
-                    actualSubmissionId = newSub[0].id;
-                } else {
-                    throw new Error("Failed to wrap team in submission block");
-                }
-            }
-
-            await dbFetch('reviews', 'POST', {
-                submission_id: actualSubmissionId,
+            await addDoc(collection(db, 'reviews'), {
+                team_id: form.submission_id,
                 judge_name: form.judge_name,
                 round,
                 scores,
@@ -219,7 +187,6 @@ export default function AdminReviews() {
                 </button>
             </div>
 
-            {/* Round Selector */}
             <div style={{ display: 'flex', gap: '0', marginBottom: '20px', borderRadius: '6px', overflow: 'hidden', border: `1px solid ${S.border}` }}>
                 {[1, 2].map(r => (
                     <button key={r} onClick={() => { setRound(r); resetForm(); }} style={{
@@ -234,7 +201,6 @@ export default function AdminReviews() {
                 ))}
             </div>
 
-            {/* Metrics Info */}
             <div style={{ background: 'rgba(0,255,255,0.04)', border: '1px solid rgba(0,255,255,0.15)', borderRadius: '8px', padding: '12px 18px', marginBottom: '20px', display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
                 {metrics.map(m => (
                     <span key={m.key} style={{ fontFamily: "'Rajdhani', sans-serif", fontSize: '0.85rem', color: S.dim }}>
@@ -246,7 +212,6 @@ export default function AdminReviews() {
                 </span>
             </div>
 
-            {/* Entry Form */}
             <div style={{ background: 'rgba(20,8,0,0.3)', border: `1px solid rgba(255,140,0,0.15)`, borderRadius: '8px', padding: '25px', marginBottom: '25px' }}>
                 <h3 style={{ fontFamily: "'Orbitron', sans-serif", fontSize: '0.75rem', color: S.gold, letterSpacing: '0.1em', marginBottom: '20px' }}>
                     ADD REVIEW — ROUND {round}
@@ -321,7 +286,6 @@ export default function AdminReviews() {
                 </div>
             </div>
 
-            {/* Reviews List */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
                 <h3 style={{ fontFamily: "'Orbitron', sans-serif", fontSize: '0.75rem', color: S.gold, letterSpacing: '0.1em', margin: 0 }}>
                     ROUND {round} REVIEWS ({reviews.length})
@@ -344,7 +308,7 @@ export default function AdminReviews() {
                     <div key={r.id} style={{ background: 'rgba(0,10,20,0.4)', border: '1px solid rgba(255,140,0,0.1)', borderRadius: '8px', padding: '15px 20px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                             <div style={{ fontFamily: "'Rajdhani', sans-serif", color: '#fff' }}>
-                                {r.submissions?.teams?.name || 'Unknown Team'} — <span style={{ color: S.dim }}>Judge: {r.judge_name}</span>
+                                {r.teamName || 'Unknown Team'} — <span style={{ color: S.dim }}>Judge: {r.judge_name}</span>
                             </div>
                             <div style={{ fontFamily: "'Orbitron', sans-serif", fontSize: '1.1rem', color: S.gold, fontWeight: 700 }}>
                                 {r.total_score}/{totalMax}

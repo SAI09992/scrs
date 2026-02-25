@@ -15,7 +15,6 @@ export default function IntroVideo({ onComplete }) {
 
         video.addEventListener('ended', handleEnded);
         video.play().catch(() => {
-            // Autoplay blocked — skip
             onComplete();
         });
 

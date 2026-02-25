@@ -1,5 +1,12 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '../lib/supabaseClient';
+import { auth, db } from '../lib/firebaseClient';
+import {
+    signInWithEmailAndPassword,
+    signOut as firebaseSignOut,
+    onAuthStateChanged,
+    sendPasswordResetEmail,
+} from 'firebase/auth';
+import { doc, getDoc, collection, query, where, getDocs, updateDoc } from 'firebase/firestore';
 
 const AuthContext = createContext(null);
 const INACTIVITY_TIMEOUT = 30 * 60 * 1000;
@@ -11,7 +18,6 @@ export function AuthProvider({ children }) {
     const [loading, setLoading] = useState(true);
     const inactivityTimer = useRef(null);
 
-    // Restore team session from localStorage
     const restoreTeamSession = useCallback(() => {
         try {
             const stored = localStorage.getItem(TEAM_SESSION_KEY);
@@ -33,92 +39,94 @@ export function AuthProvider({ children }) {
         return false;
     }, []);
 
-    const fetchProfile = useCallback(async (sessionUser) => {
+    const fetchProfile = useCallback(async (firebaseUser) => {
+        const fallbackProfile = {
+            id: firebaseUser.uid,
+            email: firebaseUser.email,
+            full_name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || '',
+            role: 'admin',
+            team_id: null,
+            teams: null,
+        };
+
         try {
-            const { data: profileData, error: profileError } = await supabase
-                .from('profiles').select('*').eq('id', sessionUser.id).single();
+            const profileRef = doc(db, 'profiles', firebaseUser.uid);
+            const profilePromise = getDoc(profileRef);
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Firestore timeout')), 5000)
+            );
+            const profileSnap = await Promise.race([profilePromise, timeoutPromise]);
 
             let teamData = null;
-            if (!profileError && profileData) {
+            if (profileSnap.exists()) {
+                const profileData = { id: profileSnap.id, ...profileSnap.data() };
                 if (profileData.team_id) {
                     try {
-                        const { data: team } = await supabase
-                            .from('teams').select('*').eq('id', profileData.team_id).single();
-                        teamData = team;
-                    } catch { }
+                        const teamRef = doc(db, 'teams', profileData.team_id);
+                        const teamSnap = await getDoc(teamRef);
+                        if (teamSnap.exists()) teamData = { id: teamSnap.id, ...teamSnap.data() };
+                    } catch (e) { console.warn('Team fetch failed:', e.message); }
                 }
                 const fullProfile = { ...profileData, teams: teamData };
                 setProfile(fullProfile);
                 return fullProfile;
             }
-        } catch { }
+        } catch (e) {
+            console.warn('Profile fetch failed (using admin fallback):', e.message);
+        }
 
-        const meta = sessionUser.user_metadata || {};
-        const fallbackProfile = {
-            id: sessionUser.id,
-            email: sessionUser.email,
-            full_name: meta.full_name || sessionUser.email?.split('@')[0] || '',
-            role: meta.role || 'admin',
-            team_id: null,
-            teams: null,
-        };
         setProfile(fallbackProfile);
         return fallbackProfile;
     }, []);
 
-    // Init session
     useEffect(() => {
-        let mounted = true;
-        const hardTimeout = setTimeout(() => { if (mounted) setLoading(false); }, 5000);
+        if (restoreTeamSession()) {
+            setLoading(false);
+            return;
+        }
 
-        const init = async () => {
-            // First try team session (instant, no network)
-            if (restoreTeamSession()) {
-                if (mounted) { clearTimeout(hardTimeout); setLoading(false); }
-                return;
-            }
-
-            // Then try Supabase auth (for admin)
-            try {
-                const { data: { session } } = await supabase.auth.getSession();
-                if (!mounted) return;
-                if (session?.user) {
-                    setUser(session.user);
-                    try { await fetchProfile(session.user); } catch { }
-                }
-            } catch { }
-
-            if (mounted) { clearTimeout(hardTimeout); setLoading(false); }
-        };
-
-        init();
-
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(
-            async (event, session) => {
-                if (!mounted) return;
-                if (event === 'SIGNED_IN' && session?.user) {
-                    setUser(session.user);
-                    try { await fetchProfile(session.user); } catch { }
-                    setLoading(false);
-                } else if (event === 'SIGNED_OUT') {
-                    // Only clear if not a team session
-                    if (!localStorage.getItem(TEAM_SESSION_KEY)) {
-                        setUser(null);
-                        setProfile(null);
-                    }
-                    setLoading(false);
-                } else if (event === 'TOKEN_REFRESHED' && session?.user) {
-                    setUser(session.user);
+        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+            if (firebaseUser) {
+                setUser({ id: firebaseUser.uid, email: firebaseUser.email });
+                try { await fetchProfile(firebaseUser); } catch { }
+            } else {
+                if (!localStorage.getItem(TEAM_SESSION_KEY)) {
+                    setUser(null);
+                    setProfile(null);
                 }
             }
-        );
+            setLoading(false);
+        });
 
-        return () => { mounted = false; clearTimeout(hardTimeout); subscription.unsubscribe(); };
+        return () => unsubscribe();
     }, [fetchProfile, restoreTeamSession]);
 
-    // Inactivity logout
     const doSignOut = useCallback(async () => {
-        const isTeam = !!localStorage.getItem(TEAM_SESSION_KEY);
+        const storedStr = localStorage.getItem(TEAM_SESSION_KEY);
+        const isTeam = !!storedStr;
+
+        if (isTeam) {
+            try {
+                const sessionStr = JSON.parse(storedStr);
+                const teamId = sessionStr.team_id;
+                const deviceId = localStorage.getItem('scrs_device_id');
+                if (teamId && deviceId) {
+                    const teamRef = doc(db, 'teams', teamId);
+                    const teamSnap = await getDoc(teamRef);
+                    if (teamSnap.exists()) {
+                        const dat = teamSnap.data();
+                        let activeDevices = Array.isArray(dat.active_devices) ? dat.active_devices : [];
+                        if (activeDevices.includes(deviceId)) {
+                            activeDevices = activeDevices.filter(d => d !== deviceId);
+                            await updateDoc(teamRef, { active_devices: activeDevices });
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to cleanup session:', e);
+            }
+        }
+
         setUser(null);
         setProfile(null);
         if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
@@ -126,7 +134,7 @@ export function AuthProvider({ children }) {
         if (isTeam) {
             localStorage.removeItem(TEAM_SESSION_KEY);
         } else {
-            try { await supabase.auth.signOut({ scope: 'local' }); } catch { }
+            try { await firebaseSignOut(auth); } catch { }
         }
     }, []);
 
@@ -145,100 +153,44 @@ export function AuthProvider({ children }) {
         };
     }, [user, doSignOut]);
 
-    // Admin login (Supabase Auth — bypasses client lock entirely)
     const signIn = async (email, password) => {
-        const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY },
-            body: JSON.stringify({ email, password }),
-        });
-        const result = await res.json();
-        if (!res.ok) throw new Error(result.error_description || result.msg || 'Invalid credentials');
-
-        // Store session manually in localStorage (same format Supabase expects)
-        const storageKey = `sb-${new URL(import.meta.env.VITE_SUPABASE_URL).hostname.split('.')[0]}-auth-token`;
-        localStorage.setItem(storageKey, JSON.stringify({
-            access_token: result.access_token,
-            refresh_token: result.refresh_token,
-            expires_at: result.expires_at,
-            expires_in: result.expires_in,
-            token_type: result.token_type,
-            user: result.user,
-        }));
-
-        // Set state directly
-        setUser(result.user);
-        const meta = result.user?.user_metadata || {};
-        setProfile({
-            id: result.user.id,
-            email: result.user.email,
-            full_name: meta.full_name || result.user.email?.split('@')[0] || '',
-            role: meta.role || 'admin',
-            team_id: null,
-            teams: null,
-        });
-
-        return { user: result.user, session: result };
+        const result = await signInWithEmailAndPassword(auth, email, password);
+        const firebaseUser = result.user;
+        setUser({ id: firebaseUser.uid, email: firebaseUser.email });
+        const profileData = await fetchProfile(firebaseUser);
+        return { user: firebaseUser, profile: profileData };
     };
 
-    // Participant login (team code) — tries multiple approaches
     const teamLogin = async (teamCode) => {
-        const code = teamCode.trim();
-        const url = import.meta.env.VITE_SUPABASE_URL;
-        const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
-        let team = null;
+        const code = teamCode.trim().toUpperCase();
+        const teamsRef = collection(db, 'teams');
+        const q = query(teamsRef, where('team_code', '==', code));
+        const snapshot = await getDocs(q);
 
-        // Approach 1: Local API proxy (uses service role key server-side)
-        try {
-            const r1 = await fetch('/api/team-lookup', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code }),
-            });
-            if (r1.ok) {
-                const d1 = await r1.json();
-                console.log('Local proxy result:', d1);
-                if (d1.team) team = d1.team;
+        if (snapshot.empty) throw new Error('Invalid team code');
+
+        const teamDoc = snapshot.docs[0];
+        const team = { id: teamDoc.id, ...teamDoc.data() };
+
+        let deviceId = localStorage.getItem('scrs_device_id');
+        if (!deviceId) {
+            deviceId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+            localStorage.setItem('scrs_device_id', deviceId);
+        }
+
+        let activeDevices = Array.isArray(team.active_devices) ? [...team.active_devices] : [];
+        if (!activeDevices.includes(deviceId)) {
+            if (activeDevices.length >= 2) {
+                throw new Error('Maximum devices (2) reached. Please log out from another device.');
             }
-        } catch (e) { console.log('Local proxy fallback:', e); }
-
-        // Approach 2: RPC function
-        if (!team) {
+            activeDevices.push(deviceId);
             try {
-                const r2 = await fetch(`${url}/rest/v1/rpc/lookup_team`, {
-                    method: 'POST',
-                    headers: { 'apikey': key, 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code }),
-                });
-                if (r2.ok) {
-                    const d2 = await r2.json();
-                    if (d2 && d2.id) team = d2;
-                }
-            } catch (e) { console.log('RPC fallback:', e); }
+                const teamRef = doc(db, 'teams', team.id);
+                await updateDoc(teamRef, { active_devices: activeDevices });
+            } catch (err) {
+                throw new Error('Failed to register device session: ' + err.message);
+            }
         }
-
-        // Approach 3: Supabase client (works if user already has session)
-        if (!team) {
-            try {
-                const { data } = await supabase.from('teams').select('*').eq('team_code', code).limit(1);
-                if (data && data.length > 0) team = data[0];
-            } catch (e) { console.log('Client fallback:', e); }
-        }
-
-        // Approach 4: Direct REST (in case RLS was fixed)
-        if (!team) {
-            try {
-                const r4 = await fetch(`${url}/rest/v1/teams?team_code=eq.${encodeURIComponent(code)}&select=*`, {
-                    headers: { 'apikey': key, 'Authorization': `Bearer ${key}`, 'Accept': 'application/json' },
-                });
-                const d4 = await r4.json();
-                if (Array.isArray(d4) && d4.length > 0) team = d4[0];
-            } catch (e) { console.log('REST fallback:', e); }
-        }
-
-        console.log('Team login result:', team);
-
-        if (!team) throw new Error('Invalid team code');
 
         const session = {
             team_id: team.id,
@@ -246,6 +198,7 @@ export function AuthProvider({ children }) {
             team_code: team.team_code,
             email: '',
             team_data: team,
+            device_id: deviceId
         };
         localStorage.setItem(TEAM_SESSION_KEY, JSON.stringify(session));
 
@@ -266,8 +219,7 @@ export function AuthProvider({ children }) {
     const signOut = doSignOut;
 
     const resetPassword = async (email) => {
-        const { error } = await supabase.auth.resetPasswordForEmail(email);
-        if (error) throw error;
+        await sendPasswordResetEmail(auth, email);
     };
 
     const value = {

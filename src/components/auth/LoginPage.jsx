@@ -21,7 +21,6 @@ export default function LoginPage() {
         return () => clearTimeout(timer);
     }, []);
 
-    // Redirect if already logged in
     useEffect(() => {
         if (!authLoading && user && profile) {
             const dest = profile.role === 'admin' ? '/admin' : '/dashboard';

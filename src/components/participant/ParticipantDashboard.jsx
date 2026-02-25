@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { supabase } from '../../lib/supabaseClient';
-
-import { dbGet } from '../../lib/dbProxy';
+import { db } from '../../lib/firebaseClient';
+import { collection, query, orderBy, limit, getDocs, doc, getDoc } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 
 const K = {
@@ -33,13 +32,16 @@ export default function ParticipantDashboard() {
 
     useEffect(() => {
         const load = async () => {
-            const { data: ann } = await supabase.from('announcements').select('*').order('created_at', { ascending: false }).limit(3);
-            if (ann) setAnnouncements(ann);
             try {
-                const data = await dbGet('teams?team_code=eq.__TIMELINE__&select=members');
-                if (Array.isArray(data) && data.length > 0 && data[0].members) {
-                    const tl = typeof data[0].members === 'string' ? JSON.parse(data[0].members) : data[0].members;
-                    if (tl && tl.length > 0) setTimeline(tl);
+                const annQ = query(collection(db, 'announcements'), orderBy('created_at', 'desc'), limit(3));
+                const annSnap = await getDocs(annQ);
+                setAnnouncements(annSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+            } catch { }
+
+            try {
+                const tlSnap = await getDoc(doc(db, 'event_timeline', 'global'));
+                if (tlSnap.exists() && tlSnap.data().items) {
+                    setTimeline(tlSnap.data().items);
                 }
             } catch { /* fallback to empty timeline */ }
         };
@@ -47,12 +49,11 @@ export default function ParticipantDashboard() {
     }, []);
 
     const team = profile?.teams;
-    const members = team?.members ? (typeof team.members === 'string' ? JSON.parse(team.members) : team.members) : [];
+    const members = typeof team?.members === 'string' ? JSON.parse(team.members) : (team?.members || []);
 
-    // Timeline from admin config only
     const timelineData = timeline.map((t) => ({ time: t.time || 'TBA', title: t.title, desc: t.description, is_current: t.is_current }));
 
-    const icons = ['🚪', '📯', '⚔️', '💻', '🍛', '🔍', '🌙', '⚡', '🎤', '🏆', '🌟'];
+    const icons = ['🚀', '🎯', '⚔️', '💻', '🍱', '🔍', '🌙', '⚡', '🎤', '🏆', '🌟'];
 
     const SectionTitle = ({ icon, title, subtitle }) => (
         <div style={{ textAlign: 'center', marginBottom: '50px' }}>
@@ -153,7 +154,7 @@ export default function ParticipantDashboard() {
                         { icon: '🎯', title: 'Bounty Missions', desc: 'Navigate through challenging real-world bounty missions. Choose your battleground wisely.' },
                         { icon: '⏱️', title: '24-Hour Sprint', desc: 'Survive the 24-hour coding marathon. Build, iterate, and deploy under pressure.' },
                         { icon: '⚖️', title: 'Expert Judging', desc: 'Your solutions evaluated by industry experts and seasoned judges on multiple criteria.' },
-                        { icon: '🧭', title: 'Mentorship', desc: 'Guidance from industry veterans and faculty mentors throughout the event.' },
+                        { icon: '🧠', title: 'Mentorship', desc: 'Guidance from industry veterans and faculty mentors throughout the event.' },
                         { icon: '🌐', title: 'Networking', desc: 'Connect with fellow developers, share ideas, and forge alliances that last.' },
                         { icon: '📜', title: 'Certification', desc: 'Every warrior receives an official certificate of participation from SCRS.' },
                     ].map((f, i) => (
@@ -215,7 +216,7 @@ export default function ParticipantDashboard() {
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                         {['Official Certificate of Participation', 'Mentoring by Experts', 'Free Refreshments', '1 EE Credit'].map((item, i) => (
                             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 0' }}>
-                                <span style={{ color: K.gold }}>◈</span>
+                                <span style={{ color: K.gold }}>◆</span>
                                 <span style={{ color: K.text, fontSize: '0.95rem' }}>{item}</span>
                             </div>
                         ))}

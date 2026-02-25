@@ -1,23 +1,19 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 
-// Auth
 import LoginPage from './components/auth/LoginPage';
 import ForgotPassword from './components/auth/ForgotPassword';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import AdminRoute from './components/auth/AdminRoute';
 
-// Intro
 import IntroSequence from './components/intro/IntroSequence';
 
-// Participant
 import ParticipantLayout from './components/participant/ParticipantLayout';
 import ParticipantDashboard from './components/participant/ParticipantDashboard';
 import ProblemSelection from './components/participant/ProblemSelection';
 import ActivitiesPage from './components/participant/ActivitiesPage';
 import ParticipantAttendance from './components/participant/ParticipantAttendance';
 
-// Admin
 import AdminLayout from './components/admin/AdminLayout';
 import AdminDashboard from './components/admin/AdminDashboard';
 import AdminProblems from './components/admin/AdminProblems';

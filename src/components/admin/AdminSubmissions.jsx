@@ -1,22 +1,35 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../../lib/supabaseClient';
+import { db } from '../../lib/firebaseClient';
+import { collection, getDocs, updateDoc, doc, query, orderBy, getDoc } from 'firebase/firestore';
 
 export default function AdminSubmissions() {
     const [submissions, setSubmissions] = useState([]);
     useEffect(() => { loadData(); }, []);
 
     const loadData = async () => {
-        const { data } = await supabase.from('submissions').select('*, teams(name)').order('submitted_at', { ascending: false });
-        if (data) setSubmissions(data);
+        const q = query(collection(db, 'submissions'), orderBy('submitted_at', 'desc'));
+        const snap = await getDocs(q);
+        const items = [];
+        for (const d of snap.docs) {
+            const sub = { id: d.id, ...d.data() };
+            try {
+                if (sub.team_id) {
+                    const teamSnap = await getDoc(doc(db, 'teams', sub.team_id));
+                    sub.teams = teamSnap.exists() ? teamSnap.data() : null;
+                }
+            } catch { }
+            items.push(sub);
+        }
+        setSubmissions(items);
     };
 
     const updateStatus = async (id, status) => {
-        await supabase.from('submissions').update({ status }).eq('id', id);
+        await updateDoc(doc(db, 'submissions', id), { status });
         loadData();
     };
 
     const toggleWindow = async (id, current) => {
-        await supabase.from('submissions').update({ is_window_open: !current }).eq('id', id);
+        await updateDoc(doc(db, 'submissions', id), { is_window_open: !current });
         loadData();
     };
 

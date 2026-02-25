@@ -25,7 +25,6 @@ export default function IntroSequence() {
             const timer = setTimeout(() => transitionToNext(), SCENE_DURATIONS[currentScene]);
             return () => clearTimeout(timer);
         } else {
-            // Intro complete → go to login
             navigate('/login', { replace: true });
         }
     }, [currentScene, transitionToNext, navigate]);

@@ -1,7 +1,8 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useState, useEffect } from 'react';
-import { supabase } from '../../lib/supabaseClient';
+import { db } from '../../lib/firebaseClient';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 
 export default function ParticipantLayout() {
     const { signOut, profile } = useAuth();
@@ -11,13 +12,14 @@ export default function ParticipantLayout() {
 
     useEffect(() => {
         if (!profile?.team_id) return;
-        supabase
-            .from('selections')
-            .select('id')
-            .eq('team_id', profile.team_id)
-            .maybeSingle()
-            .then(({ data }) => { if (data) setHasSelection(true); })
-            .catch(() => { });
+        const checkSelection = async () => {
+            try {
+                const q = query(collection(db, 'selections'), where('team_id', '==', profile.team_id));
+                const snap = await getDocs(q);
+                if (!snap.empty) setHasSelection(true);
+            } catch { }
+        };
+        checkSelection();
     }, [profile?.team_id]);
 
     const handleLogout = async () => {
@@ -26,7 +28,7 @@ export default function ParticipantLayout() {
     };
 
     const navItems = [
-        { path: '/dashboard', label: 'HOME', icon: '⬡' },
+        { path: '/dashboard', label: 'HOME', icon: '🏠', end: true },
         { path: '/attendance', label: 'ATTENDANCE', icon: '📋' },
         { path: '/problems', label: hasSelection ? 'MY PS' : 'CHOOSE PS', icon: hasSelection ? '📄' : '🎯' },
     ];
@@ -51,6 +53,7 @@ export default function ParticipantLayout() {
                         <NavLink
                             key={item.path}
                             to={item.path}
+                            end={item.end}
                             style={({ isActive }) => ({
                                 display: 'flex', alignItems: 'center', gap: '6px',
                                 padding: '8px 12px', borderRadius: '6px',
@@ -81,7 +84,7 @@ export default function ParticipantLayout() {
                         display: 'none', background: 'none', border: 'none', color: '#0ff',
                         fontSize: '1.4rem', cursor: 'pointer', padding: '4px',
                     }}>
-                        {menuOpen ? '✕' : '☰'}
+                        {menuOpen ? '✖' : '☰'}
                     </button>
                 </div>
             </header>
@@ -96,6 +99,7 @@ export default function ParticipantLayout() {
                         <NavLink
                             key={item.path}
                             to={item.path}
+                            end={item.end}
                             onClick={() => setMenuOpen(false)}
                             style={({ isActive }) => ({
                                 display: 'flex', alignItems: 'center', gap: '10px',

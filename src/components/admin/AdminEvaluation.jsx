@@ -7,7 +7,6 @@ const DEFAULT_CRITERIA = {
     2: [],
 };
 
-// Shared helper to get criteria — used by Reviews too
 export function getEvalCriteria(round) {
     try {
         const stored = localStorage.getItem(STORAGE_KEY);

@@ -1,25 +1,6 @@
 import { useState, useEffect } from 'react';
-
-const SUPA_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPA_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-function getToken() {
-    const sk = `sb-${new globalThis.URL(SUPA_URL).hostname.split('.')[0]}-auth-token`;
-    const s = localStorage.getItem(sk);
-    return s ? JSON.parse(s).access_token : SUPA_KEY;
-}
-
-async function db(path, method = 'GET', body = null) {
-    const h = { 'Content-Type': 'application/json', 'apikey': SUPA_KEY, 'Authorization': `Bearer ${getToken()}` };
-    if (method === 'PATCH' || method === 'POST') h['Prefer'] = 'return=representation';
-    const opts = { method, headers: h };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(`${SUPA_URL}/rest/v1/${path}`, opts);
-    const text = await res.text();
-    const data = text ? JSON.parse(text) : null;
-    if (!res.ok) console.error('DB Error:', res.status, data);
-    return { data, ok: res.ok };
-}
+import { db } from '../../lib/firebaseClient';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, orderBy, serverTimestamp, getDoc, setDoc } from 'firebase/firestore';
 
 export default function AdminProblems() {
     const [problems, setProblems] = useState([]);
@@ -34,12 +15,17 @@ export default function AdminProblems() {
     useEffect(() => { loadData(); }, []);
 
     const loadData = async () => {
-        const { data: probs } = await db('problems?select=*&order=created_at.desc');
-        if (probs) setProblems(probs);
-        const { data: cfg } = await db('selection_config?id=eq.1');
-        if (cfg && cfg.length > 0) setSelConfig(cfg[0]);
-        const { data: sels } = await db('selections?select=problem_id');
-        if (sels) setSelections(sels);
+        const probQ = query(collection(db, 'problems'), orderBy('created_at', 'desc'));
+        const probSnap = await getDocs(probQ);
+        setProblems(probSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+
+        try {
+            const cfgSnap = await getDoc(doc(db, 'selection_config', 'global'));
+            if (cfgSnap.exists()) setSelConfig({ id: cfgSnap.id, ...cfgSnap.data() });
+        } catch { }
+
+        const selSnap = await getDocs(collection(db, 'selections'));
+        setSelections(selSnap.docs.map(d => ({ id: d.id, ...d.data() })));
     };
 
     const getSelectionCount = (problemId) => selections.filter(s => s.problem_id === problemId).length;
@@ -55,9 +41,10 @@ export default function AdminProblems() {
             is_visible: form.is_visible,
         };
         if (editing) {
-            await db(`problems?id=eq.${editing}`, 'PATCH', saveData);
+            await updateDoc(doc(db, 'problems', editing), saveData);
         } else {
-            await db('problems', 'POST', saveData);
+            saveData.created_at = serverTimestamp();
+            await addDoc(collection(db, 'problems'), saveData);
         }
         setForm({ title: '', description: '', team_limit: 3, requirements: '', deliverables: '', evaluation_focus: '', resources: '', is_visible: false });
         setEditing(null);
@@ -66,7 +53,7 @@ export default function AdminProblems() {
 
     const handleDelete = async (id) => {
         if (confirm('Delete this problem?')) {
-            await db(`problems?id=eq.${id}`, 'DELETE');
+            await deleteDoc(doc(db, 'problems', id));
             loadData();
         }
     };
@@ -83,16 +70,12 @@ export default function AdminProblems() {
     };
 
     const toggleVisibility = async (id, current) => {
-        await db(`problems?id=eq.${id}`, 'PATCH', { is_visible: !current });
+        await updateDoc(doc(db, 'problems', id), { is_visible: !current });
         loadData();
     };
 
     const toggleSelectionWindow = async () => {
-        await db('selection_config?id=eq.1', 'PATCH', { is_open: !selConfig.is_open });
-        // If no config row exists, create it
-        if (!selConfig.id) {
-            await db('selection_config', 'POST', { id: 1, is_open: true });
-        }
+        await setDoc(doc(db, 'selection_config', 'global'), { is_open: !selConfig.is_open }, { merge: true });
         loadData();
     };
 
@@ -127,7 +110,6 @@ export default function AdminProblems() {
                 </button>
             </div>
 
-            {/* Add/Edit Form */}
             <div style={{
                 background: 'rgba(20,8,0,0.3)', border: '1px solid rgba(255,140,0,0.15)',
                 borderRadius: '8px', padding: '25px', marginBottom: '25px',
@@ -179,7 +161,6 @@ export default function AdminProblems() {
                 </div>
             </div>
 
-            {/* Problems List */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {problems.map((p) => {
                     const limit = parseInt(p.category) || 999;

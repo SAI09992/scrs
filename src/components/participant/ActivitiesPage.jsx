@@ -16,7 +16,7 @@ export default function ActivitiesPage() {
     };
 
     return (
-        <div style={{ maxWidth: '800px' }}>
+        <div style={{ padding: '40px 20px', maxWidth: '800px', margin: '0 auto', fontFamily: "'Rajdhani', sans-serif", color: '#fff' }}>
             <h2 style={{
                 fontFamily: "'Orbitron', sans-serif", fontSize: '1rem', color: '#0ff',
                 letterSpacing: '0.1em', marginBottom: '25px',

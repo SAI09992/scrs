@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { supabase } from '../../lib/supabaseClient';
+import { db } from '../../lib/firebaseClient';
 import { useAuth } from '../../context/AuthContext';
+import { collection, getDocs, addDoc, deleteDoc, doc, orderBy, query, serverTimestamp } from 'firebase/firestore';
 
 export default function AdminAnnouncements() {
     const { user } = useAuth();
@@ -10,18 +11,19 @@ export default function AdminAnnouncements() {
     useEffect(() => { loadData(); }, []);
 
     const loadData = async () => {
-        const { data } = await supabase.from('announcements').select('*').order('created_at', { ascending: false });
-        if (data) setAnnouncements(data);
+        const q = query(collection(db, 'announcements'), orderBy('created_at', 'desc'));
+        const snap = await getDocs(q);
+        setAnnouncements(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     };
 
     const handleBroadcast = async () => {
-        await supabase.from('announcements').insert({ ...form, created_by: user?.id });
+        await addDoc(collection(db, 'announcements'), { ...form, created_by: user?.id, created_at: serverTimestamp() });
         setForm({ title: '', message: '', priority: 'info' });
         loadData();
     };
 
     const handleDelete = async (id) => {
-        await supabase.from('announcements').delete().eq('id', id);
+        await deleteDoc(doc(db, 'announcements', id));
         loadData();
     };
 
@@ -39,7 +41,6 @@ export default function AdminAnnouncements() {
                 ANNOUNCEMENTS
             </h2>
 
-            {/* Broadcast Form */}
             <div style={{ background: 'rgba(20,8,0,0.3)', border: '1px solid rgba(255,140,0,0.15)', borderRadius: '8px', padding: '25px', marginBottom: '25px' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '15px', marginBottom: '15px' }}>
                     <div>
@@ -68,7 +69,6 @@ export default function AdminAnnouncements() {
                 </button>
             </div>
 
-            {/* List */}
             {announcements.map((a) => (
                 <div key={a.id} style={{
                     background: 'rgba(0,10,20,0.4)', border: `1px solid ${priorityColor[a.priority]}30`,
@@ -89,7 +89,7 @@ export default function AdminAnnouncements() {
                         {a.message}
                     </div>
                     <div style={{ fontFamily: "'Rajdhani', sans-serif", color: 'rgba(255,255,255,0.3)', fontSize: '0.75rem', marginTop: '6px' }}>
-                        {new Date(a.created_at).toLocaleString()}
+                        {a.created_at?.toDate ? new Date(a.created_at.toDate()).toLocaleString() : ''}
                     </div>
                 </div>
             ))}
