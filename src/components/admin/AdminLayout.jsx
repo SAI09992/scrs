@@ -15,6 +15,7 @@ const navItems = [
     { path: '/admin/evaluation', label: 'EVALUATION', icon: '⚖️' },
     { path: '/admin/timeline', label: 'TIMELINE', icon: '⏳' },
     { path: '/admin/announcements', label: 'ANNOUNCE', icon: '📢' },
+    { path: '/admin/audio', label: 'AUDIO', icon: '🎵' },
     { path: '/admin/reports', label: 'REPORTS', icon: '▤' },
 ];
 

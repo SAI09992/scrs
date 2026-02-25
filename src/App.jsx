@@ -28,13 +28,17 @@ import AdminAttendance from './components/admin/AdminAttendance';
 import AdminEvaluation from './components/admin/AdminEvaluation';
 import AdminTeamUpload from './components/admin/AdminTeamUpload';
 import AdminCredentials from './components/admin/AdminCredentials';
+import AdminAudio from './components/admin/AdminAudio';
 
 import './index.css';
+
+import GlobalAudioPlayer from './components/common/GlobalAudioPlayer';
 
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
+        <GlobalAudioPlayer />
         <Routes>
           {/* Cinematic Intro */}
           <Route path="/" element={<IntroSequence />} />
@@ -78,6 +82,7 @@ export default function App() {
             <Route path="/admin/timeline" element={<AdminTimeline />} />
             <Route path="/admin/announcements" element={<AdminAnnouncements />} />
             <Route path="/admin/reports" element={<AdminReports />} />
+            <Route path="/admin/audio" element={<AdminAudio />} />
           </Route>
 
           {/* Fallback */}
