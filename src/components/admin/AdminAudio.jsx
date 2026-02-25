@@ -37,7 +37,10 @@ export default function AdminAudio() {
     const handleFileSelect = (e) => {
         const file = e.target.files[0];
         if (file) {
-            if (!file.type.startsWith('audio/')) {
+            const isAudioMime = file.type.startsWith('audio/');
+            const isAudioExtension = file.name.toLowerCase().endsWith('.mp3') || file.name.toLowerCase().endsWith('.wav');
+
+            if (!isAudioMime && !isAudioExtension) {
                 setMessage('Error: Please select a valid audio file (MP3, WAV, etc.)');
                 setSelectedFile(null);
                 if (fileInputRef.current) fileInputRef.current.value = '';
@@ -187,7 +190,7 @@ export default function AdminAudio() {
                         </label>
                         <input
                             type="file"
-                            accept="audio/*"
+                            accept=".mp3,.wav,.mpeg,audio/*"
                             ref={fileInputRef}
                             onChange={handleFileSelect}
                             style={{
