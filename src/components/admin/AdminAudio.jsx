@@ -38,10 +38,11 @@ export default function AdminAudio() {
         const file = e.target.files[0];
         if (file) {
             const isAudioMime = file.type.startsWith('audio/');
-            const isAudioExtension = file.name.toLowerCase().endsWith('.mp3') || file.name.toLowerCase().endsWith('.wav');
+            const name = file.name.toLowerCase();
+            const isAudioExtension = name.endsWith('.mp3') || name.endsWith('.wav') || name.endsWith('.mpeg') || name.endsWith('.mpg') || name.endsWith('.m4a');
 
             if (!isAudioMime && !isAudioExtension) {
-                setMessage('Error: Please select a valid audio file (MP3, WAV, etc.)');
+                setMessage('Error: Please select a valid audio file (MP3, WAV, MPEG, etc.)');
                 setSelectedFile(null);
                 if (fileInputRef.current) fileInputRef.current.value = '';
                 return;
