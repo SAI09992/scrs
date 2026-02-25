@@ -114,10 +114,11 @@ export default function GlobalAudioPlayer() {
     }
 
     return (
-        <div style={{ position: 'fixed', bottom: '25px', right: '25px', zIndex: 9999 }}>
+        <div style={{ position: 'fixed', bottom: '25px', right: '25px', zIndex: 9999, pointerEvents: 'none' }}>
             <button
                 onClick={togglePlay}
                 style={{
+                    pointerEvents: 'auto',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
