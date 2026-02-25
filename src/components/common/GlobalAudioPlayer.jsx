@@ -46,8 +46,12 @@ export default function GlobalAudioPlayer() {
                 howlRef.current.unload();
             }
 
+            // Google Drive and some raw URLs block cross-origin requests.
+            // Using a public CORS proxy to strip the headers entirely for playback!
+            const proxiedUrl = `https://corsproxy.io/?${encodeURIComponent(audioConfig.url)}`;
+
             howlRef.current = new Howl({
-                src: [audioConfig.url],
+                src: [proxiedUrl, audioConfig.url], // fallback to raw
                 html5: true, // Forces HTML5 Audio, crucial for streaming large files / bypassing some CORS
                 loop: true,
                 format: ['mp3', 'wav', 'mpeg', 'm4a'], // Hints to Howler to try these formats
