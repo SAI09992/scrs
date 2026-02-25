@@ -46,8 +46,19 @@ export default function GlobalAudioPlayer() {
                 howlRef.current.unload();
             }
 
+            // Google Drive 'drive.google.com' CORS workaround
+            let processedUrl = audioConfig.url;
+            if (processedUrl.includes('drive.google.com/file/d/')) {
+                const idMatch = processedUrl.match(/\/d\/(.*?)\//);
+                if (idMatch && idMatch[1]) {
+                    processedUrl = `https://docs.google.com/uc?export=download&id=${idMatch[1]}`;
+                }
+            } else if (processedUrl.includes('drive.google.com/uc')) {
+                processedUrl = processedUrl.replace('drive.google.com', 'docs.google.com');
+            }
+
             howlRef.current = new Howl({
-                src: [audioConfig.url],
+                src: [processedUrl],
                 html5: true, // Forces HTML5 Audio, crucial for streaming large files / bypassing some CORS
                 loop: true,
                 format: ['mp3', 'mpeg', 'wav', 'm4a'], // Hints to Howler to try these formats
